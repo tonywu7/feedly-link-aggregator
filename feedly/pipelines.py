@@ -29,7 +29,7 @@ from typing import Dict, Set
 from scrapy.exceptions import DropItem
 
 from .spiders.feedly_rss import FeedlyRssSpider
-from .utils import JSONDict, parse_html, is_http
+from .utils import JSONDict, ensure_protocol, is_absolute_http, parse_html
 
 log = logging.getLogger('feedly.pipeline')
 
@@ -67,9 +67,11 @@ class FeedlyExternalResourcePipeline:
 
         visual = item.get('visual')
         if visual:
-            external['src'].add(visual.get('url'))
+            u = visual.get('url')
+            if u and u != 'none':
+                external['src'].add(u)
 
-        external = {k: [u for u in v if is_http(u)] for k, v in external.items()}
+        external = {k: [ensure_protocol(u) for u in v if is_absolute_http(u)] for k, v in external.items()}
 
         home: Path = item['_dir']
         spider._write_file(home.joinpath('external.json'), json.dumps(external, ensure_ascii=False, skipkeys=True))

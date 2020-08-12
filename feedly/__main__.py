@@ -41,7 +41,6 @@ def collect_urls(crawled, attr):
     """
     home = Path(crawled)
     attr = set(attr.split(','))
-    urls = set()
 
     with open(home.joinpath('index.json'), 'r') as f:
         index = json.load(f)
@@ -50,9 +49,9 @@ def collect_urls(crawled, attr):
         with open(home.joinpath(f'items/{item_hash[:2]}/{item_hash[2:4]}/{item_hash}/external.json'), 'r') as f:
             external = json.load(f)
             for k in attr:
-                urls |= set(external.get(k, []))
-
-    print('\n'.join(urls))
+                urls = external.get(k, [])
+                if urls:
+                    print('\n'.join(urls))
 
 
 if __name__ == '__main__':
