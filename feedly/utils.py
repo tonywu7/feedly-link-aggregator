@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import List, Dict, Union
+from typing import Dict, List, Union
 from urllib.parse import urlsplit
 
 from scrapy.http import TextResponse
@@ -34,4 +34,16 @@ def parse_html(domstring, url='about:blank') -> TextResponse:
 
 
 def is_http(u):
-    return isinstance(u, str) and urlsplit(u).scheme in {'', 'http', 'https'}
+    return isinstance(u, str) and urlsplit(u).scheme in {'http', 'https'}
+
+
+def is_absolute_http(u):
+    if not isinstance(u, str):
+        return False
+    s = urlsplit(u)
+    return s.scheme in {'http', 'https'} or s.scheme == '' and s.netloc
+
+
+def ensure_protocol(u, protocol='http'):
+    s = urlsplit(u)
+    return u if s.scheme else f'{protocol}:{u}'
