@@ -1,12 +1,12 @@
-# feedly-stream-reader
+# feedly-link-aggregator
 
-A Scrapy project for consuming feedly's [Streams API](https://developer.feedly.com/v3/streams/).
+A Scrapy project for collecting hyperlinks from RSS feeds using feedly's [Streams API](https://developer.feedly.com/v3/streams/).
 
 ### Usage
 
 ```bash
-> git clone https://github.com/monotony113/feedly-link-parser.git
-> cd feedly-link-parser
+> git clone https://github.com/monotony113/feedly-link-aggregator.git
+> cd feedly
 ```
 
 You'll need a Python 3 environment.
@@ -60,7 +60,7 @@ what it is doing isn't crawling so much as it is consuming data from a publicly 
 - The availability of the crawled data depends on feedly. If no one has ever subscribed to the RSS feed you are
 trying to crawl on feedly, then your crawl may not yield any result.
 - Similarly, the data you can crawl from feedly are only as complete as how much feedly has crawled your RSS feed.
-- See the full feedly cloud API at [developer.feedly.com](https://developer.feedly.com).
+- Explore the feedly Cloud API at [developer.feedly.com](https://developer.feedly.com).
 
 ### Motivation
 
