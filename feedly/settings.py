@@ -19,7 +19,7 @@ LOG_LEVEL = 20
 
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
-USER_AGENT = 'Mozilla/5.0 (compatible; feedlystreamreader/0.1; +https://github.com/monotony113/feedly-stream-reader)'
+USER_AGENT = 'Mozilla/5.0 (compatible; hyperlinkaggregator/0.2; +https://github.com/monotony113/feedly-link-aggregator)'
 
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = True

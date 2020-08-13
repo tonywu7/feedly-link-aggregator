@@ -5,29 +5,29 @@ A Scrapy project for consuming feedly's [Streams API](https://developer.feedly.c
 ### Usage
 
 ```bash
-> git clone https://github.com/monotony113/feedly-stream-reader.git
-> cd feedly-stream-reader
+> git clone https://github.com/monotony113/feedly-link-parser.git
+> cd feedly-link-parser
 ```
 
 You'll need a Python 3 environment.
 
-Install dependencies (namely Scrapy and optionally `click` for CLI usage):
+Install dependencies:
 
 ```bash
-> pip install -r requirements.txt
+> python3 -m pip install -r requirements.txt
 ```
 
 Then start crawling:
 
 ```bash
-> scrapy crawl feedly_rss -a feed=[url] -a output=[dir]
+> scrapy crawl link_aggregator -a feed=[url] -a output=[json]
 ```
 
-where `[url]` is the URL to your RSS feed, and `[dir]` is the path to the directory where crawled data will be saved.
+where `[url]` is the URL to your RSS feed, and `[json]` is the path to the JSON file where crawled data will be saved.
 For example, 
 
 ```bash
-> scrapy crawl feedly_rss -a feed="https://xkcd.com/atom.xml" -a output=instance/xkcd
+> scrapy crawl link_aggregator -a feed="https://xkcd.com/atom.xml" -a output=instance/xkcd.json
 ```
 
 The feed URL must be the actual RSS feed location that returns RSS/Atom XML data (i.e. a path to the homepage won't work).
@@ -36,10 +36,10 @@ The feed URL must be the actual RSS feed location that returns RSS/Atom XML data
 After it's finished, run the following to list all external links found in webpage data provided by feedly:
 
 ```bash
-> python3 -m feedly collect-urls [dir]
+> python -m feedly collect-urls [json]
 ```
 
-where `[dir]` is the same directory where crawled data are saved.
+where `[json]` is the same JSON file where crawled data are saved.
 
 You may then pipe the URLs to your choice of downloader.
 
@@ -51,13 +51,6 @@ If you no longer have access to the original RSS feed, but you are subscribed to
 
 1. Visit the feed's page list, your window's location should look something like `https://feedly.com/i/subscription/feed%2Fhttps%3A%2F%2Fxkcd.com%2Fatom.xml`
 2. Copy everything after the `subscription/feed%2F` part, you will get something like `https%3A%2F%2Fxkcd.com%2Fatom.xml`
-3. Unquote it; you can use `urllib.parse.unquote`: launch the Python console, then run the following:
-```Python console
->>> from urllib.parse import unquote
->>> u = 'Paste the copied string here'
->>> unquote(u)
-# RSS feed URL
-```
 
 ### Notes
 
@@ -77,7 +70,7 @@ Basically:
 
 1. As you may have already known, Tumblr did not actually delete most of the media files in the Great Tumblr Purge, 
 but rather merely removed the posts containing them, meaning those media files are still available on the internet, 
-albeit obscured behind their CDN URLs (those `**.media.tumblr.com` links).
+albeit obscured behind their CDN URLs (the `**.media.tumblr.com` links).
 2. feedly differs from ordinary RSS readers in that it caches data from RSS feeds so that people who subscribe to the same 
 RSS feed receive data from feedly first instead of directly from the RSS provider when they are using feedly.
 3. Among the data that feedly caches are HTML snippets of each page in the RSS feed, which include our Tumblr media links
