@@ -22,56 +22,73 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from pathlib import Path
-from urllib.parse import SplitResult, quote
+from urllib.parse import SplitResult, quote, unquote
 
+import simplejson as json
 from scrapy import Spider, signals
 from scrapy.http import Request, TextResponse
 
-from ..utils import JSONDict
+from ..items import FeedlyEntry, HyperlinkStore
+from ..utils import JSONDict, json_converters
 
 log = logging.getLogger('feedly.spider')
 
 
 class FeedlyRssSpider(Spider):
-    name = 'feedly_rss'
+    name = 'link_aggregator'
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
         'ITEM_PIPELINES': {
             'feedly.pipelines.FeedlyItemPipeline': 300,
-            'feedly.pipelines.FeedlyExternalResourcePipeline': 400,
+            'feedly.pipelines.SaveIndexPipeline': 900,
         },
     }
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider: FeedlyRssSpider = super().from_crawler(crawler, *args, **kwargs)
+        spider.stats = crawler.stats
+        spider.stats.set_value('item_milestone', 0)
         crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
         return spider
 
-    def __init__(self, name=None, *, output: str, feed=None, stream_type='feed', ranked='oldest', count=500, **kwargs):
+    def __init__(self, name=None, *, output: str, feed=None, stream_type='feed', ranked='oldest', count=1000, flush_limit=5000, **kwargs):
         super().__init__(name=name, **kwargs)
 
         output = Path(output)
-        os.makedirs(output.resolve(), exist_ok=True)
         self.output = output
 
-        index = self._read_file('index.json')
-        index: JSONDict = json.loads(index) if index else {'items': {}}
-        self.stream_id = index.setdefault('uri', feed)
+        if feed:
+            feed = unquote(feed)
+        index = {
+            'type': stream_type,
+            'items': {},
+            'resources': HyperlinkStore(),
+        }
+        if output.exists():
+            with open(output.resolve(), 'r') as f:
+                index = json.load(f)
+            existing_feed = index.get('feed_origin')
+            if feed and existing_feed != feed:
+                raise ValueError(f'Found existing crawl data of a different feed: {existing_feed}')
+
+            index['items'] = {k: FeedlyEntry(**v) for k, v in index['items'].items()}
+            index['resources'] = HyperlinkStore(index['resources'])
+
+        self.stream_id = index.setdefault('feed_origin', feed)
         self.stream_type = index.setdefault('type', stream_type)
         if not self.stream_id:
-            raise ValueError('No feed URL supplied, and an "index.json" with a valid URL is not found in the output directory.')
+            raise ValueError('No feed URL supplied, and no existing crawl data with a valid feed URL found')
 
         self.index: JSONDict = index
+        self._flush_limit = flush_limit
 
         self.api_base_url = {
             'scheme': 'https',
-            'netloc': 'feedly.com',
+            'netloc': 'cloud.feedly.com',
             'path': '/v3/streams/contents',
             'fragment': '',
         }
@@ -102,9 +119,6 @@ class FeedlyRssSpider(Spider):
         except json.JSONDecodeError as e:
             log.error(e)
 
-        for k in {'direction', 'alternate'}:
-            self.index.setdefault(k, res.get(k))
-
         for entry in res.get('items', []):
             yield entry
 
@@ -112,20 +126,14 @@ class FeedlyRssSpider(Spider):
         if cont:
             yield response.follow(self.get_streams_url(continuation=cont))
 
+    def _flush(self):
+        log.info(f'Saving progress ... got {len(self.index["items"])} items, {len(self.index["resources"])} external links')
+        with open(self.output.resolve(), 'w') as f:
+            json.dump(
+                self.index, f,
+                ensure_ascii=False, default=json_converters, for_json=True,
+                iterable_as_array=True,
+            )
+
     def spider_closed(self, spider):
-        self._write_file('index.json', json.dumps(self.index, ensure_ascii=False))
-
-    def _read_file(self, path, mode='r'):
-        rpath = self.output.joinpath(path)
-        if rpath.exists():
-            with open(rpath, mode) as f:
-                return f.read()
-        else:
-            self._write_file(path, '')
-            return ''
-
-    def _write_file(self, path, content, mode='w'):
-        rpath = self.output.joinpath(path).resolve()
-        os.makedirs(rpath.parent, exist_ok=True)
-        with open(rpath, mode) as f:
-            f.write(content)
+        self._flush()

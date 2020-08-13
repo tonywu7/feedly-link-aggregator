@@ -20,60 +20,48 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import json
 import logging
-from hashlib import sha1
-from pathlib import Path
-from typing import Dict, Set
 
 from scrapy.exceptions import DropItem
 
-from .spiders.feedly_rss import FeedlyRssSpider
-from .utils import JSONDict, ensure_protocol, is_absolute_http, parse_html
+from .items import FeedlyEntry, HyperlinkStore
+from .spiders.link_aggregator import FeedlyRssSpider
+from .utils import JSONDict
 
 log = logging.getLogger('feedly.pipeline')
 
 
 class FeedlyItemPipeline:
     def process_item(self, item: JSONDict, spider: FeedlyRssSpider):
-        item_id = item.get('id')
-        if not item_id:
-            raise DropItem('Malformed item (id not found)')
+        try:
+            entry = FeedlyEntry.from_upstream(item)
+        except Exception as e:
+            log.warn(exc_info=e)
+            raise DropItem()
 
-        item_cks = sha1(item_id.encode()).hexdigest()
-        spider.index['items'][item_cks] = 1
-
-        item_home = Path(f'items/{item_cks[:2]}/{item_cks[2:4]}/{item_cks}')
-        spider._write_file(item_home.joinpath('index.json'), json.dumps(item, ensure_ascii=False, skipkeys=True))
-
-        log.info(f'Got item {item_id}')
-        origin = item.get('originId')
-        if origin:
-            log.info(f'URL: {origin}')
-        item['_hash'] = item_cks
-        item['_dir'] = item_home
-        return item
-
-
-class FeedlyExternalResourcePipeline:
-    def process_item(self, item: JSONDict, spider: FeedlyRssSpider):
-        external: Dict[str, Set[str]] = {k: set() for k in {'href', 'src', 'data-src', 'data-href'}}
+        spider.index['items'][entry.id_hash] = entry
+        store: HyperlinkStore[str] = spider.index['resources']
         for k in {'content', 'summary'}:
             content = item.get(k)
             if content:
-                content = parse_html(content.get('content', ''))
-                for attr, links in external.items():
-                    links |= {tag.attrib.get(attr) for tag in content.css(f'[{attr}]')}
+                content = content.get('content')
+            if content:
+                store.parse_html(entry.source, content)
+                entry.markup[k] = content
 
         visual = item.get('visual')
         if visual:
             u = visual.get('url')
             if u and u != 'none':
-                external['src'].add(u)
-
-        external = {k: [ensure_protocol(u) for u in v if is_absolute_http(u)] for k, v in external.items()}
-
-        home: Path = item['_dir']
-        spider._write_file(home.joinpath('external.json'), json.dumps(external, ensure_ascii=False, skipkeys=True))
+                store.put(u, tag={'img'})
 
         return item
+
+
+class SaveIndexPipeline:
+    def process_item(self, item: JSONDict, spider: FeedlyRssSpider):
+        if not spider._flush_limit:
+            return item
+        if len(spider.index['items']) - spider.stats.get_value('item_milestone') >= spider._flush_limit:
+            spider._flush()
+            spider.stats.set_value('item_milestone', len(spider.index['items']))
