@@ -6,7 +6,7 @@ A Scrapy project for collecting hyperlinks from RSS feeds using feedly's [Stream
 
 ```bash
 > git clone https://github.com/monotony113/feedly-link-aggregator.git
-> cd feedly
+> cd feedly-link-aggregator
 ```
 
 You'll need a Python 3 environment.
