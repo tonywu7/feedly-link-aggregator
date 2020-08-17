@@ -30,7 +30,7 @@ import attr
 from attr.converters import optional
 
 from . import utils
-from .utils import JSONDict, Keywords, KeywordCollection
+from .utils import JSONDict, KeywordCollection, Keywords
 
 
 def ensure_collection(supplier):
@@ -82,6 +82,7 @@ class HyperlinkStore(utils.KeywordStore):
 
     def __init__(self, serialized: JSONDict = None):
         super().__init__()
+        self._index: Dict[int, str]
         if serialized:
             self._deserialize(serialized)
 
@@ -91,7 +92,7 @@ class HyperlinkStore(utils.KeywordStore):
             self._index[hash_] = k
             self._taggings[hash_] = {c: set(ls) for c, ls in v.items()}
 
-    def parse_html(self, source, markup):
+    def parse_html(self, source, markup, **kwargs):
         markup = utils.parse_html(markup)
         for attrib in self.TARGET_ATTRS:
             html_tags = markup.css(f'[{attrib}]')
@@ -103,7 +104,7 @@ class HyperlinkStore(utils.KeywordStore):
 
                 keywords: KeywordCollection = {
                     'source': {source},
-                    'domain': {urlsplit(url).netloc},
+                    'domain': set(utils.domain_parents(urlsplit(url).netloc)),
                     'tag': set(),
                     'id': set(),
                     'class': set(),
@@ -111,7 +112,7 @@ class HyperlinkStore(utils.KeywordStore):
                 keywords['tag'].add(tag.xpath('name()').get())
                 keywords['id'] |= set(tag.xpath('@id').getall())
                 keywords['class'] |= set(tag.xpath('@class').getall())
-                self.put(url, **keywords)
+                self.put(url, **keywords, **kwargs)
 
     def for_json(self):
         return {item: self._taggings[hash_] for hash_, item in self._index.items()}
