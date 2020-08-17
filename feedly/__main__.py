@@ -77,6 +77,8 @@ def collect_urls(crawl_data, include, exclude):
         - tag (HTML tags from which the URL is extracted)
         - id (`id`s of the HTML tags, if any)
         - class (HTML classes of the HTML tags)
+        - feedly_id (Feedly entry ID)
+        - feedly_keyword (Keywords of the URL's source webpages, as tagged by Feedly)
 
     The default filters (when no --include or --exclude is specified) are
 
@@ -115,7 +117,7 @@ def collect_urls(crawl_data, include, exclude):
 def collect_keywords(crawl_data):
     store: HyperlinkStore = load_json(crawl_data)
     items = store.get_items()
-    print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keywords', set()) for item in items]))))
+    print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keyword', set()) for item in items]))))
 
 
 if __name__ == '__main__':

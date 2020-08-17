@@ -49,7 +49,7 @@ class FeedlyItemPipeline:
                 store.parse_html(
                     entry.source, content,
                     feedly_id={entry.id_hash},
-                    feedly_keywords=entry.keywords,
+                    feedly_keyword=entry.keywords,
                 )
                 entry.markup[k] = content
 

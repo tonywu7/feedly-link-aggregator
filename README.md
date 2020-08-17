@@ -63,6 +63,17 @@ trying to crawl on Feedly, then your crawl may not yield any result.
 - Similarly, the data you can crawl from Feedly are only as complete as how much Feedly has crawled your RSS feed.
 - Explore the Feedly Cloud API at [developer.feedly.com](https://developer.feedly.com).
 
+### Changelog
+
+- **2020/08/17**
+    - _URL filtering:_ you can now specify what URLs to include/exclude when running the `collect-urls` command. For example:
+    ```bash
+    > python -m feedly collect-urls --include tag=a --exclude domain=secure.bank.com [json]
+    ```
+    will print out all URLs found on HTML `<a>` tags, except for those whose domain or parent domain contains "secure.bank.com".
+    - _Feedly keywords:_ Feedly keyword data are now included in the crawl data, which you can use for filtering when running `collect-url`, 
+    using the `feedly_keyword=` filter. Additionally, there is a new `collect-keywords` command that lists all keywords found in a crawl.
+
 ### Motivation
 
 I started this project because I found out that Feedly caches a significant amount of data from dead Tumblr blogs :)
