@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from time import sleep
 from typing import Tuple
 from urllib.parse import SplitResult, quote, unquote
 
@@ -101,15 +102,17 @@ class FeedlyRssSpider(Spider):
 
         if not res.get('results'):
             log.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
+            sleep(5)
             return
         results = [feed['feedId'].split('/', 1) for feed in res['results']]
         if len(results) > 1:
             msg = [
                 f'Found more than one possible feeds using the query `{self._query}`:',
                 *['  ' + feed[1] for feed in results],
-                'Please run scrapy again using one of the values above.',
+                'Please run scrapy again using one of the values above. Crawler will now close.',
             ]
             log.critical('\n'.join(msg))
+            sleep(5)
             return
 
         self.stream_type, self.stream_id = results[0]

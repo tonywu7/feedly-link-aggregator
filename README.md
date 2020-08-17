@@ -32,9 +32,6 @@ For example,
 > scrapy crawl link_aggregator -a feed="https://xkcd.com/atom.xml" -a output=instance/xkcd.json
 ```
 
-The feed URL must be the actual RSS feed location that returns RSS/Atom XML data (i.e. a path to the homepage won't work).
-(Don't forget to properly quote your URL!)
-
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
 
 ```bash
@@ -65,6 +62,10 @@ trying to crawl on Feedly, then your crawl may not yield any result.
 
 ### Changelog
 
+- **v0.3, 2020/08/18**
+    - _Fuzzy search:_ it's no longer necessary to specify the full URL to the RSS feed data. Spider now uses Feedly's Search API to
+    determine the correct URL. This means that you can simply specify e.g. the website's domain name, and Feedly will resolve it for you.
+    In case there are multiple matches, they will be printed so that you can choose one and try again.
 - **2020/08/17**
     - _URL filtering:_ you can now specify what URLs to include/exclude when running the `collect-urls` command. For example: `--include tag=a --exclude domain=secure.bank.com` will print out all URLs found on HTML `<a>` tags, except for those whose domain or parent domain contains "secure.bank.com".
     - _Feedly keywords:_ Feedly keyword data are now included in the crawl data, which you can use for filtering when running `collect-url`, 
