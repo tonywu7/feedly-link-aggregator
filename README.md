@@ -22,10 +22,10 @@ Install dependencies:
 Then start crawling:
 
 ```bash
-> scrapy crawl link_aggregator -a feed=[url] -a output=[json]
+> scrapy crawl link_aggregator -a feed='<url>' -a output='<json>'
 ```
 
-where `[url]` is the URL to your RSS feed, and `[json]` is the path to the JSON file where crawled data will be saved.
+where `<url>` is the URL to your RSS feed, and `<json>` is the path to the JSON file where crawled data will be saved.
 For example, 
 
 ```bash
@@ -38,10 +38,10 @@ The feed URL must be the actual RSS feed location that returns RSS/Atom XML data
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
 
 ```bash
-> python -m feedly collect-urls [json]
+> python -m feedly collect-urls '<json>'
 ```
 
-where `[json]` is the same JSON file where crawled data are saved.
+where `<json>` is the same JSON file where crawled data are saved.
 
 You may then pipe the URLs to your choice of downloader.
 
@@ -66,11 +66,7 @@ trying to crawl on Feedly, then your crawl may not yield any result.
 ### Changelog
 
 - **2020/08/17**
-    - _URL filtering:_ you can now specify what URLs to include/exclude when running the `collect-urls` command. For example:
-    ```bash
-    > python -m feedly collect-urls --include tag=a --exclude domain=secure.bank.com [json]
-    ```
-    will print out all URLs found on HTML `<a>` tags, except for those whose domain or parent domain contains "secure.bank.com".
+    - _URL filtering:_ you can now specify what URLs to include/exclude when running the `collect-urls` command. For example: `--include tag=a --exclude domain=secure.bank.com` will print out all URLs found on HTML `<a>` tags, except for those whose domain or parent domain contains "secure.bank.com".
     - _Feedly keywords:_ Feedly keyword data are now included in the crawl data, which you can use for filtering when running `collect-url`, 
     using the `feedly_keyword=` filter. Additionally, there is a new `collect-keywords` command that lists all keywords found in a crawl.
 
