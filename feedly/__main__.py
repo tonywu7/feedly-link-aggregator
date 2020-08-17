@@ -28,6 +28,13 @@ import simplejson as json
 from .items import HyperlinkStore
 
 
+def load_json(path):
+    with open(path, 'r') as f:
+        index = json.load(f)
+    store = HyperlinkStore(index['resources'])
+    return store
+
+
 @click.group()
 def cli():
     pass
@@ -88,6 +95,7 @@ def collect_urls(crawl_data, include, exclude):
     --include tag=source --include tag=img --exclude class=hidden
         include all URLs found on <source> tags or <img> tags but exclude those whose class list contains `hidden`
     """
+    store: HyperlinkStore = load_json(crawl_data)
 
     if not include:
         include = ()
@@ -96,15 +104,18 @@ def collect_urls(crawl_data, include, exclude):
     if not include and not exclude:
         include = ['tag=img', 'tag=source']
 
-    with open(crawl_data, 'r') as f:
-        index = json.load(f)
-
-    store = HyperlinkStore(index['resources'])
-
-    included = reduce(lambda x, y: x | set(store.getall(**_kvp_to_dict(y))), include, set())
-    excluded = reduce(lambda x, y: x | set(store.getall(**_kvp_to_dict(y))), exclude, set())
+    included = reduce(lambda x, y: x | set(store.get_all(**_kvp_to_dict(y))), include, set())
+    excluded = reduce(lambda x, y: x | set(store.get_all(**_kvp_to_dict(y))), exclude, set())
 
     print('\n'.join(included - excluded))
+
+
+@cli.command()
+@click.argument('crawl_data', type=click.Path(exists=True))
+def collect_keywords(crawl_data):
+    store: HyperlinkStore = load_json(crawl_data)
+    items = store.get_items()
+    print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keywords', set()) for item in items]))))
 
 
 if __name__ == '__main__':

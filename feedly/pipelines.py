@@ -46,7 +46,11 @@ class FeedlyItemPipeline:
             if content:
                 content = content.get('content')
             if content:
-                store.parse_html(entry.source, content)
+                store.parse_html(
+                    entry.source, content,
+                    feedly_id={entry.id_hash},
+                    feedly_keywords=entry.keywords,
+                )
                 entry.markup[k] = content
 
         visual = item.get('visual')

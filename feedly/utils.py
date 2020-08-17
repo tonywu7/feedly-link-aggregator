@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Hashable
 from datetime import datetime, timezone
 from hashlib import sha1
-from typing import Any, Dict, Generic, List, Set, TypeVar, Union
+from typing import Any, Dict, Generic, List, Set, TypeVar, Tuple, Union
 from urllib.parse import urlsplit
 
 from scrapy.http import TextResponse
@@ -82,6 +82,11 @@ def sha1sum(s: Union[str, bytes]) -> str:
     return sha1(s).hexdigest()
 
 
+def domain_parents(domain: str) -> Tuple[str]:
+    parts = domain.split('.')
+    return tuple('.'.join(parts[-i:]) for i in range(len(parts), 1, -1))
+
+
 T = TypeVar('T', bound=Hashable)
 
 
@@ -90,7 +95,7 @@ class KeywordStore(Generic[T]):
         self._index: Dict[int, T] = {}
         self._taggings: Dict[int, KeywordCollection] = {}
 
-    def getall(self, **kws: Dict[Hashable, Hashable]) -> T:
+    def _get_hashes(self, **kws: Dict[Hashable, Hashable]) -> int:
         for hash_, keywords in self._taggings.items():
             match = True
             for category, keyword in kws.items():
@@ -98,7 +103,18 @@ class KeywordStore(Generic[T]):
                     match = False
                     break
             if match:
-                yield self._index[hash_]
+                yield hash_
+
+    def get_all(self, **kws: Dict[Hashable, Hashable]) -> T:
+        for hash_ in self._get_hashes(**kws):
+            yield self._index[hash_]
+
+    def get_items(self, **kws: Dict[Hashable, Hashable]) -> KeywordCollection:
+        for hash_ in self._get_hashes(**kws):
+            yield {
+                '_item': self._index[hash_],
+                **self._taggings[hash_],
+            }
 
     def put(self, item: T, **kws: KeywordCollection):
         hash_ = hash(item)
