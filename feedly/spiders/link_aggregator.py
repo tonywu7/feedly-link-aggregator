@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Tuple
 from urllib.parse import SplitResult, quote, unquote
 
 import simplejson as json
 from scrapy import Spider, signals
+from scrapy.exceptions import CloseSpider
 from scrapy.http import Request, TextResponse
 
-from ..items import FeedlyEntry, HyperlinkStore
+from ..items import HyperlinkStore
 from ..utils import JSONDict, json_converters
 
 log = logging.getLogger('feedly.spider')
@@ -47,6 +49,16 @@ class FeedlyRssSpider(Spider):
         },
     }
 
+    API_BASE = {
+        'scheme': 'https',
+        'netloc': 'cloud.feedly.com',
+        'fragment': '',
+    }
+    API_ENDPOINTS = {
+        'streams': '/v3/streams/contents',
+        'search': '/v3/search/feeds',
+    }
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider: FeedlyRssSpider = super().from_crawler(crawler, *args, **kwargs)
@@ -55,43 +67,25 @@ class FeedlyRssSpider(Spider):
         crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
         return spider
 
-    def __init__(self, name=None, *, output: str, feed=None, stream_type='feed', ranked='oldest', count=1000, flush_limit=5000, **kwargs):
+    def __init__(self, name=None, *, output: str, feed, ranked='oldest', count=1000, flush_limit=5000, overwrite=False, **kwargs):
         super().__init__(name=name, **kwargs)
 
         output = Path(output)
+        if output.exists() and not overwrite:
+            log.error(f'{output} already exists, not overwriting.')
+            raise CloseSpider('file_exists')
         self.output = output
 
-        if feed:
-            feed = unquote(feed)
         index = {
-            'type': stream_type,
             'items': {},
             'resources': HyperlinkStore(),
         }
-        if output.exists():
-            with open(output.resolve(), 'r') as f:
-                index = json.load(f)
-            existing_feed = index.get('feed_origin')
-            if feed and existing_feed != feed:
-                raise ValueError(f'Found existing crawl data of a different feed: {existing_feed}')
 
-            index['items'] = {k: FeedlyEntry(**v) for k, v in index['items'].items()}
-            index['resources'] = HyperlinkStore(index['resources'])
-
-        self.stream_id = index.setdefault('feed_origin', feed)
-        self.stream_type = index.setdefault('type', stream_type)
-        if not self.stream_id:
-            raise ValueError('No feed URL supplied, and no existing crawl data with a valid feed URL found')
+        self._query = unquote(feed)
 
         self.index: JSONDict = index
         self._flush_limit = flush_limit
 
-        self.api_base_url = {
-            'scheme': 'https',
-            'netloc': 'cloud.feedly.com',
-            'path': '/v3/streams/contents',
-            'fragment': '',
-        }
         self.api_base_params = {
             'count': count,
             'ranked': ranked,
@@ -99,25 +93,49 @@ class FeedlyRssSpider(Spider):
             'unreadOnly': 'false',
         }
 
-    def get_streams_url(self, **params):
-        stream_endpoint = f'{self.stream_type}/{self.stream_id}'
-        url = {**self.api_base_url}
-        query = {
-            'streamId': stream_endpoint,
-            **self.api_base_params,
-            **params,
-        }
-        url['query'] = '&'.join([f'{quote(k)}={quote(str(v))}' for k, v in query.items()])
+    def start_requests(self):
+        return [Request(self.build_api_call('search', query=self._query), callback=self.set_feed_id)]
+
+    def set_feed_id(self, response) -> Tuple[str, str]:
+        res = self._guard_json(response.text)
+
+        if not res.get('results'):
+            log.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
+            return
+        results = [feed['feedId'].split('/', 1) for feed in res['results']]
+        if len(results) > 1:
+            msg = [
+                f'Found more than one possible feeds using the query `{self._query}`:',
+                *['  ' + feed[1] for feed in results],
+                'Please run scrapy again using one of the values above.',
+            ]
+            log.critical('\n'.join(msg))
+            return
+
+        self.stream_type, self.stream_id = results[0]
+        self.index['feed_origin'] = self.stream_id
+        self.index['type'] = self.stream_type
+        yield Request(self.get_streams_url(), callback=self.parse)
+
+    def build_api_call(self, endpoint, **params):
+        if endpoint not in self.API_ENDPOINTS:
+            raise ValueError(f'{endpoint} API is not supported')
+        url = {**self.API_BASE, 'path': self.API_ENDPOINTS[endpoint]}
+        url['query'] = '&'.join([f'{quote(k)}={quote(str(v))}' for k, v in params.items()])
         return SplitResult(**url).geturl()
 
-    def start_requests(self):
-        return [Request(self.get_streams_url(), callback=self.parse)]
+    def get_streams_url(self, **params):
+        stream_endpoint = f'{self.stream_type}/{self.stream_id}'
+        return self.build_api_call('streams', streamId=stream_endpoint, **self.api_base_params)
 
-    def parse(self, response: TextResponse):
+    def _guard_json(self, text: str) -> JSONDict:
         try:
-            res: JSONDict = json.loads(response.text)
+            return json.loads(text)
         except json.JSONDecodeError as e:
             log.error(e)
+
+    def parse(self, response: TextResponse):
+        res = self._guard_json(response.text)
 
         for entry in res.get('items', []):
             yield entry
