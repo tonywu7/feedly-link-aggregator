@@ -25,7 +25,7 @@ from functools import reduce
 import click
 import simplejson as json
 
-from .items import HyperlinkStore
+from .datastructures import HyperlinkStore
 
 
 def load_json(path):
@@ -106,8 +106,8 @@ def collect_urls(crawl_data, include, exclude):
     if not include and not exclude:
         include = ['tag=img', 'tag=source']
 
-    included = reduce(lambda x, y: x | set(store.get_all(**_kvp_to_dict(y))), include, set())
-    excluded = reduce(lambda x, y: x | set(store.get_all(**_kvp_to_dict(y))), exclude, set())
+    included = reduce(lambda x, y: x | set(store.all(**_kvp_to_dict(y))), include, set())
+    excluded = reduce(lambda x, y: x | set(store.all(**_kvp_to_dict(y))), exclude, set())
 
     print('\n'.join(included - excluded))
 
@@ -116,7 +116,7 @@ def collect_urls(crawl_data, include, exclude):
 @click.argument('crawl_data', type=click.Path(exists=True))
 def collect_keywords(crawl_data):
     store: HyperlinkStore = load_json(crawl_data)
-    items = store.get_items()
+    items = store.items()
     print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keyword', set()) for item in items]))))
 
 
