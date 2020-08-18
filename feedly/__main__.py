@@ -49,14 +49,13 @@ def _kvp_to_dict(s):
 @click.option('-x', '--exclude', default=None, multiple=True, help='exclude URLs matching this filter.', metavar='[filter]')
 @click.argument('crawl_data', type=click.Path(exists=True))
 def collect_urls(crawl_data, include, exclude):
-    """Collect all external links in a crawled project and print them as a newline-separated list.
+    r"""Collect all external links in a crawled project and print them as a newline-separated list.
 
     CRAWL_DATA is the path to the JSON file of an existing crawl.
 
     \b
     Filtering
     ---------
-
     You can use the `--include` and `--exclude` options to specify which URLs to print.
 
     Each `--include` or `--exclude` takes a filter, which is either a single criterion or a comma-separated list
@@ -86,7 +85,6 @@ def collect_urls(crawl_data, include, exclude):
 
     Examples
     --------
-
     \b
     --include tag=a
         include all URLs found on <a> (HTML anchor) tags

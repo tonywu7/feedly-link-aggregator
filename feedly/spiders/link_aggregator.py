@@ -25,20 +25,27 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from time import sleep
-from typing import Tuple
+from typing import List, Union
 from urllib.parse import unquote
 
 import simplejson as json
-from scrapy import Spider, signals
+from scrapy import Spider
 from scrapy.exceptions import CloseSpider
 from scrapy.http import Request, TextResponse
 
 from .. import feedly
 from ..feedly import FeedlyEntry
 from ..datastructures import HyperlinkStore
-from ..utils import JSONDict, json_converters
+from ..utils import JSONDict
 
-log = logging.getLogger('feedly.spider')
+log = logging.getLogger('feedly.spiders')
+
+
+def _guard_json(text: str) -> JSONDict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        log.error(e)
 
 
 class FeedlyRssSpider(Spider):
@@ -48,27 +55,20 @@ class FeedlyRssSpider(Spider):
         'ROBOTSTXT_OBEY': False,
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': 100,
-            'feedly.middlewares.FeedlyItemMiddleware': 300,
+            'feedly.spiders.link_aggregator.FeedEntryMiddleware': 800,
+            'feedly.spiders.link_aggregator.FeedResourceMiddleware': 900,
         },
         'ITEM_PIPELINES': {
-            'feedly.pipelines.SaveIndexPipeline': 900,
+            'feedly.pipelines.PeriodicSavePipeline': 900,
         },
     }
 
-    @classmethod
-    def from_crawler(cls, crawler, *args, **kwargs):
-        spider: FeedlyRssSpider = super().from_crawler(crawler, *args, **kwargs)
-        spider.stats = crawler.stats
-        spider.stats.set_value('item_milestone', 0)
-        crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
-        return spider
-
-    def __init__(self, name=None, *, output: str, feed: str, ranked='oldest', count=1000, flush_limit=5000, overwrite=False, **kwargs):
+    def __init__(self, name=None, *, output: str, feed: str, ranked='oldest', count=1000, flush_watermark=5000, overwrite=False, **kwargs):
         super().__init__(name=name, **kwargs)
 
         output = Path(output)
         if output.exists() and not overwrite:
-            log.error(f'{output} already exists, not overwriting.')
+            self.logger.error(f'{output} already exists, not overwriting.')
             raise CloseSpider('file_exists')
         self.output = output
 
@@ -76,11 +76,9 @@ class FeedlyRssSpider(Spider):
             'items': {},
             'resources': HyperlinkStore(),
         }
-
-        self._query = unquote(feed)
-
         self.index: JSONDict = index
-        self._flush_limit = int(flush_limit)
+        self._query = unquote(feed)
+        self._flush_watermark = int(flush_watermark)
 
         self.api_base_params = {
             'count': int(count),
@@ -89,92 +87,100 @@ class FeedlyRssSpider(Spider):
             'unreadOnly': 'false',
         }
 
-    def start_requests(self):
-        return [Request(feedly.build_api_url('search', query=self._query), callback=self.start_feed)]
+    def search_for_feed(self, query, callback, **kwargs):
+        return Request(
+            feedly.build_api_url('search', query=query),
+            callback=self.parse_search_result,
+            cb_kwargs={'callback': callback},
+            **kwargs,
+        )
 
-    def start_feed(self, response) -> Tuple[str, str]:
-        res = self._guard_json(response.text)
-
+    def parse_search_result(self, response: TextResponse, *, callback):
+        res = _guard_json(response.text)
         if not res.get('results'):
-            log.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
+            yield from callback([])
+            return
+        yield from callback([feed['feedId'].split('/', 1) for feed in res['results']])
+
+    def start_requests(self):
+        return [self.search_for_feed(self._query, self.start_feed)]
+
+    def start_feed(self, feed):
+        if not feed:
+            self.logger.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
             sleep(5)
             return
-        results = [feed['feedId'].split('/', 1) for feed in res['results']]
-        if len(results) > 1:
+        if len(feed) > 1:
             msg = [
                 f'Found more than one possible feeds using the query `{self._query}`:',
-                *['  ' + feed[1] for feed in results],
+                *['  ' + f[1] for f in feed],
                 'Please run scrapy again using one of the values above. Crawler will now close.',
             ]
-            log.critical('\n'.join(msg))
+            self.logger.critical('\n'.join(msg))
             sleep(5)
             return
+        feed = f'{feed[0][0]}/{feed[0][1]}'
+        yield from self.next_page({'id': feed}, callback=self.parse)
 
-        self.stream_type, self.stream_id = results[0]
-        self.index['feed_origin'] = self.stream_id
-        self.index['type'] = self.stream_type
-        yield Request(self.get_streams_url(), callback=self.parse)
+    def next_page(self, previous, **kwargs):
+        feed = previous['id']
+        params = {}
+        cont = previous.get('continuation')
+        if cont:
+            params['continuation'] = cont
+        yield Request(self.get_streams_url(feed, **params), **kwargs)
 
-    def get_streams_url(self, **params):
-        stream_endpoint = f'{self.stream_type}/{self.stream_id}'
-        return feedly.build_api_url('streams', streamId=stream_endpoint, **self.api_base_params)
-
-    def _guard_json(self, text: str) -> JSONDict:
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            log.error(e)
+    def get_streams_url(self, feed_id, **params):
+        return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     def parse(self, response: TextResponse):
-        res = self._guard_json(response.text)
-
+        res = _guard_json(response.text)
         for item in res.get('items', []):
-            entry = self.save_item(item)
+            entry = FeedlyEntry.from_upstream(item)
             if entry:
                 yield entry
 
-        cont = res.get('continuation')
-        if cont:
-            yield response.follow(self.get_streams_url(continuation=cont))
+        yield from self.next_page(res, callback=self.parse)
 
-    def save_item(self, item):
-        try:
-            entry = FeedlyEntry.from_upstream(item)
-        except Exception as e:
-            log.warn(exc_info=e)
-            return
 
-        index = self.index
-        index['items'][entry.id_hash] = entry
-        store: HyperlinkStore = index['resources']
-        for k in {'content', 'summary'}:
-            content = item.get(k)
-            if content:
-                content = content.get('content')
-            if content:
+class FeedEntryMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        m = cls()
+        m.stats = crawler.stats
+        m.stats.set_value('rss/item_count', 0)
+        m.stats.set_value('rss/item_milestone', 0)
+        return m
+
+    def process_spider_output(self, response, result, spider):
+        for item in result:
+            if not isinstance(item, FeedlyEntry):
+                yield item
+                continue
+            self.stats.inc_value('rss/item_count')
+            spider.index['items'][item.id_hash] = item
+
+
+class FeedResourceMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        m = cls()
+        m.stats = crawler.stats
+        m.stats.set_value('rss/resource_count', 0)
+        return m
+
+    def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: FeedlyRssSpider):
+        store = spider.index['resources']
+        for item in result:
+            if not isinstance(item, FeedlyEntry):
+                yield item
+                continue
+            item: FeedlyEntry
+            for k, v in item.markup.items():
                 store.parse_html(
-                    entry.source, content,
-                    feedly_id={entry.id_hash},
-                    feedly_keyword=entry.keywords,
+                    item.url, v,
+                    feedly_id=item.id_hash,
+                    feedly_keyword=item.keywords,
                 )
-                entry.markup[k] = content
-
-        visual = item.get('visual')
-        if visual:
-            u = visual.get('url')
-            if u and u != 'none':
-                store.put(u, tag={'img'})
-
-        return entry
-
-    def _flush(self):
-        log.info(f'Saving progress ... got {len(self.index["items"])} items, {len(self.index["resources"])} external links')
-        with open(self.output.resolve(), 'w') as f:
-            json.dump(
-                self.index, f,
-                ensure_ascii=False, default=json_converters, for_json=True,
-                iterable_as_array=True,
-            )
-
-    def spider_closed(self, spider):
-        self._flush()
+            self.stats.set_value('rss/resource_count', len(store))
+            yield item
