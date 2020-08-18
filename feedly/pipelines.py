@@ -22,16 +22,46 @@
 
 import logging
 
-from .spiders.link_aggregator import FeedlyRssSpider
-from .utils import JSONDict
+import simplejson as json
+
+from .feedly import FeedlyEntry
+from .utils import json_converters
 
 log = logging.getLogger('feedly.pipeline')
 
 
-class SaveIndexPipeline:
-    def process_item(self, item: JSONDict, spider: FeedlyRssSpider):
-        if not spider._flush_limit:
-            return item
-        if len(spider.index['items']) - spider.stats.get_value('item_milestone') >= spider._flush_limit:
-            spider._flush()
-            spider.stats.set_value('item_milestone', len(spider.index['items']))
+class PeriodicSavePipeline:
+    @classmethod
+    def from_crawler(cls, crawler):
+        pipeline = cls()
+        pipeline.stats = crawler.stats
+        return pipeline
+
+    def open_spider(self, spider):
+        self.index = spider.index
+        self.output = spider.output
+        self._flush_watermark = spider._flush_watermark
+
+    def close_spider(self, spider):
+        self._flush()
+
+    def _flush(self):
+        log.info(
+            f'Saving progress ... got {self.stats.get_value("rss/item_count")} items, '
+            f'{self.stats.get_value("rss/resource_count")} external links',
+        )
+        with open(self.output.resolve(), 'w') as f:
+            json.dump(
+                self.index, f,
+                ensure_ascii=False, default=json_converters, for_json=True,
+                iterable_as_array=True,
+            )
+
+    def process_item(self, item: FeedlyEntry, spider):
+        if (
+            self._flush_watermark
+            and self.stats.get_value('rss/item_count') - self.stats.get_value('rss/item_milestone') >= self._flush_watermark
+        ):
+            self._flush()
+            self.stats.set_value('rss/item_milestone', self.stats.get_value('rss/item_count'))
+        return item

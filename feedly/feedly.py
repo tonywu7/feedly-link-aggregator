@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional
-from urllib.parse import SplitResult, quote
+from urllib.parse import SplitResult, quote, urlsplit
 
 import attr
 from attr.converters import optional
@@ -56,9 +56,10 @@ class FeedlyEntry:
     _id: str = attr.ib(default=None)
     id_hash: str = attr.ib(default=attr.Factory(lambda s: s._id and utils.sha1sum(s._id), takes_self=True))
 
-    source: str = attr.ib()
+    url: str = attr.ib()
     published: datetime = attr.ib(converter=utils.datetime_converters)
     updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters))
+    origin: Dict[str, str] = attr.ib(factory=dict)
 
     keywords: Keywords = attr.ib(converter=utils.ensure_collection(set), factory=set)
     author: Optional[str] = attr.ib(default=None)
@@ -73,10 +74,47 @@ class FeedlyEntry:
             if value:
                 data[name] = value
         data['id'] = item['id']
-        data['source'] = item.get('originId')
+        data['url'] = cls._get_page_url(item)
+        data['origin'] = cls._get_origin_url(item)
         entry = cls(**data)
-
+        cls._set_markup(entry, item)
         return entry
+
+    @staticmethod
+    def _get_page_url(item):
+        url = urlsplit(item.get('originId', ''))
+        if url.netloc:
+            url = url.geturl()
+        else:
+            url = ''
+            alt = item.get('alternate')
+            if alt and alt != 'none':
+                url = alt[0]['href']
+        return url
+
+    @staticmethod
+    def _get_origin_url(item):
+        origin = item.get('origin')
+        if origin:
+            return {
+                'feed': origin['streamId'].split('/', 1)[1],
+                'title': origin['title'],
+                'homepage': origin['htmlUrl'],
+            }
+
+    @staticmethod
+    def _set_markup(entry, item):
+        for k in {'content', 'summary'}:
+            content = item.get(k)
+            if content:
+                content = content.get('content')
+            if content:
+                entry.markup[k] = content
+        visual = item.get('visual')
+        if visual:
+            u = visual.get('url')
+            if u and u != 'none':
+                entry.markup['visual'] = f'<img src="{u}">'
 
     @staticmethod
     def _filter_attrib(attrib: attr.Attribute, value: Any) -> bool:
