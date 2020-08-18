@@ -22,44 +22,10 @@
 
 import logging
 
-from scrapy.exceptions import DropItem
-
-from .items import FeedlyEntry, HyperlinkStore
 from .spiders.link_aggregator import FeedlyRssSpider
 from .utils import JSONDict
 
 log = logging.getLogger('feedly.pipeline')
-
-
-class FeedlyItemPipeline:
-    def process_item(self, item: JSONDict, spider: FeedlyRssSpider):
-        try:
-            entry = FeedlyEntry.from_upstream(item)
-        except Exception as e:
-            log.warn(exc_info=e)
-            raise DropItem()
-
-        spider.index['items'][entry.id_hash] = entry
-        store: HyperlinkStore[str] = spider.index['resources']
-        for k in {'content', 'summary'}:
-            content = item.get(k)
-            if content:
-                content = content.get('content')
-            if content:
-                store.parse_html(
-                    entry.source, content,
-                    feedly_id={entry.id_hash},
-                    feedly_keyword=entry.keywords,
-                )
-                entry.markup[k] = content
-
-        visual = item.get('visual')
-        if visual:
-            u = visual.get('url')
-            if u and u != 'none':
-                store.put(u, tag={'img'})
-
-        return item
 
 
 class SaveIndexPipeline:

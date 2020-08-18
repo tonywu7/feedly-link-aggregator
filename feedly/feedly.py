@@ -24,21 +24,31 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, quote
 
 import attr
 from attr.converters import optional
 
 from . import utils
-from .utils import JSONDict, KeywordCollection, Keywords
+from .utils import JSONDict, Keywords
+
+API_BASE = {
+    'scheme': 'https',
+    'netloc': 'cloud.feedly.com',
+    'fragment': '',
+}
+API_ENDPOINTS = {
+    'streams': '/v3/streams/contents',
+    'search': '/v3/search/feeds',
+}
 
 
-def ensure_collection(supplier):
-    def converter(obj):
-        if obj is None:
-            return supplier()
-        return supplier(obj)
-    return converter
+def build_api_url(endpoint, **params):
+    if endpoint not in API_ENDPOINTS:
+        raise ValueError(f'{endpoint} API is not supported')
+    url = {**API_BASE, 'path': API_ENDPOINTS[endpoint]}
+    url['query'] = '&'.join([f'{quote(k)}={quote(str(v))}' for k, v in params.items()])
+    return SplitResult(**url).geturl()
 
 
 @attr.s(kw_only=True, frozen=True)
@@ -50,7 +60,7 @@ class FeedlyEntry:
     published: datetime = attr.ib(converter=utils.datetime_converters)
     updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters))
 
-    keywords: Keywords = attr.ib(converter=ensure_collection(set), factory=set)
+    keywords: Keywords = attr.ib(converter=utils.ensure_collection(set), factory=set)
     author: Optional[str] = attr.ib(default=None)
 
     markup: Dict[str, str] = attr.ib(factory=dict)
@@ -75,44 +85,3 @@ class FeedlyEntry:
     def for_json(self) -> JSONDict:
         dict_ = attr.asdict(self, filter=self._filter_attrib)
         return dict_
-
-
-class HyperlinkStore(utils.KeywordStore):
-    TARGET_ATTRS = {'src', 'href', 'data-src', 'data-href'}
-
-    def __init__(self, serialized: JSONDict = None):
-        super().__init__()
-        self._index: Dict[int, str]
-        if serialized:
-            self._deserialize(serialized)
-
-    def _deserialize(self, dict_: JSONDict):
-        for k, v in dict_.items():
-            hash_ = hash(k)
-            self._index[hash_] = k
-            self._taggings[hash_] = {c: set(ls) for c, ls in v.items()}
-
-    def parse_html(self, source, markup, **kwargs):
-        markup = utils.parse_html(markup)
-        for attrib in self.TARGET_ATTRS:
-            html_tags = markup.css(f'[{attrib}]')
-            for tag in html_tags:
-                url = tag.attrib.get(attrib)
-                if not utils.is_absolute_http(url):
-                    continue
-                url = utils.ensure_protocol(url)
-
-                keywords: KeywordCollection = {
-                    'source': {source},
-                    'domain': set(utils.domain_parents(urlsplit(url).netloc)),
-                    'tag': set(),
-                    'id': set(),
-                    'class': set(),
-                }
-                keywords['tag'].add(tag.xpath('name()').get())
-                keywords['id'] |= set(tag.xpath('@id').getall())
-                keywords['class'] |= set(tag.xpath('@class').getall())
-                self.put(url, **keywords, **kwargs)
-
-    def for_json(self):
-        return {item: self._taggings[hash_] for hash_, item in self._index.items()}

@@ -26,14 +26,16 @@ import logging
 from pathlib import Path
 from time import sleep
 from typing import Tuple
-from urllib.parse import SplitResult, quote, unquote
+from urllib.parse import unquote
 
 import simplejson as json
 from scrapy import Spider, signals
 from scrapy.exceptions import CloseSpider
 from scrapy.http import Request, TextResponse
 
-from ..items import HyperlinkStore
+from .. import feedly
+from ..feedly import FeedlyEntry
+from ..datastructures import HyperlinkStore
 from ..utils import JSONDict, json_converters
 
 log = logging.getLogger('feedly.spider')
@@ -44,20 +46,13 @@ class FeedlyRssSpider(Spider):
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
+        'SPIDER_MIDDLEWARES': {
+            'scrapy.spidermiddlewares.depth.DepthMiddleware': 100,
+            'feedly.middlewares.FeedlyItemMiddleware': 300,
+        },
         'ITEM_PIPELINES': {
-            'feedly.pipelines.FeedlyItemPipeline': 300,
             'feedly.pipelines.SaveIndexPipeline': 900,
         },
-    }
-
-    API_BASE = {
-        'scheme': 'https',
-        'netloc': 'cloud.feedly.com',
-        'fragment': '',
-    }
-    API_ENDPOINTS = {
-        'streams': '/v3/streams/contents',
-        'search': '/v3/search/feeds',
     }
 
     @classmethod
@@ -68,7 +63,7 @@ class FeedlyRssSpider(Spider):
         crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
         return spider
 
-    def __init__(self, name=None, *, output: str, feed, ranked='oldest', count=1000, flush_limit=5000, overwrite=False, **kwargs):
+    def __init__(self, name=None, *, output: str, feed: str, ranked='oldest', count=1000, flush_limit=5000, overwrite=False, **kwargs):
         super().__init__(name=name, **kwargs)
 
         output = Path(output)
@@ -85,19 +80,19 @@ class FeedlyRssSpider(Spider):
         self._query = unquote(feed)
 
         self.index: JSONDict = index
-        self._flush_limit = flush_limit
+        self._flush_limit = int(flush_limit)
 
         self.api_base_params = {
-            'count': count,
+            'count': int(count),
             'ranked': ranked,
             'similar': 'true',
             'unreadOnly': 'false',
         }
 
     def start_requests(self):
-        return [Request(self.build_api_call('search', query=self._query), callback=self.set_feed_id)]
+        return [Request(feedly.build_api_url('search', query=self._query), callback=self.start_feed)]
 
-    def set_feed_id(self, response) -> Tuple[str, str]:
+    def start_feed(self, response) -> Tuple[str, str]:
         res = self._guard_json(response.text)
 
         if not res.get('results'):
@@ -120,16 +115,9 @@ class FeedlyRssSpider(Spider):
         self.index['type'] = self.stream_type
         yield Request(self.get_streams_url(), callback=self.parse)
 
-    def build_api_call(self, endpoint, **params):
-        if endpoint not in self.API_ENDPOINTS:
-            raise ValueError(f'{endpoint} API is not supported')
-        url = {**self.API_BASE, 'path': self.API_ENDPOINTS[endpoint]}
-        url['query'] = '&'.join([f'{quote(k)}={quote(str(v))}' for k, v in params.items()])
-        return SplitResult(**url).geturl()
-
     def get_streams_url(self, **params):
         stream_endpoint = f'{self.stream_type}/{self.stream_id}'
-        return self.build_api_call('streams', streamId=stream_endpoint, **self.api_base_params)
+        return feedly.build_api_url('streams', streamId=stream_endpoint, **self.api_base_params)
 
     def _guard_json(self, text: str) -> JSONDict:
         try:
@@ -140,12 +128,44 @@ class FeedlyRssSpider(Spider):
     def parse(self, response: TextResponse):
         res = self._guard_json(response.text)
 
-        for entry in res.get('items', []):
-            yield entry
+        for item in res.get('items', []):
+            entry = self.save_item(item)
+            if entry:
+                yield entry
 
         cont = res.get('continuation')
         if cont:
             yield response.follow(self.get_streams_url(continuation=cont))
+
+    def save_item(self, item):
+        try:
+            entry = FeedlyEntry.from_upstream(item)
+        except Exception as e:
+            log.warn(exc_info=e)
+            return
+
+        index = self.index
+        index['items'][entry.id_hash] = entry
+        store: HyperlinkStore = index['resources']
+        for k in {'content', 'summary'}:
+            content = item.get(k)
+            if content:
+                content = content.get('content')
+            if content:
+                store.parse_html(
+                    entry.source, content,
+                    feedly_id={entry.id_hash},
+                    feedly_keyword=entry.keywords,
+                )
+                entry.markup[k] = content
+
+        visual = item.get('visual')
+        if visual:
+            u = visual.get('url')
+            if u and u != 'none':
+                store.put(u, tag={'img'})
+
+        return entry
 
     def _flush(self):
         log.info(f'Saving progress ... got {len(self.index["items"])} items, {len(self.index["resources"])} external links')
