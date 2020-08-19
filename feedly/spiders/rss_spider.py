@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+from functools import wraps
 from pathlib import Path
 from time import sleep
 from typing import List, Union
@@ -47,6 +48,20 @@ def _guard_json(text: str) -> JSONDict:
         log.error(e)
 
 
+def with_authorization(func):
+    @wraps(func)
+    def add_header(self: FeedlyRssSpider, *args, **kwargs):
+        g = func(self, *args, **kwargs)
+        if self.token:
+            for req in g:
+                if isinstance(req, Request):
+                    req.headers['Authorization'] = f'OAuth {self.token}'
+                yield req
+        else:
+            yield from g
+    return add_header
+
+
 class FeedlyRssSpider(Spider):
     name = 'feed_content'
 
@@ -58,7 +73,14 @@ class FeedlyRssSpider(Spider):
         },
     }
 
-    def __init__(self, name=None, *, output: str, feed: str, ranked='oldest', count=1000, flush_watermark=5000, overwrite=False, **kwargs):
+    def __init__(
+        self, name=None, *,
+        output: str, feed: str,
+        ranked='oldest', count=1000,
+        flush_watermark=5000, overwrite=False,
+        token=None,
+        **kwargs,
+    ):
         super().__init__(name=name, **kwargs)
 
         output = Path(output)
@@ -79,6 +101,7 @@ class FeedlyRssSpider(Spider):
             'rss/resource_count': 5000,
         }
 
+        self.token = token
         self.api_base_params = {
             'count': int(count),
             'ranked': ranked,
@@ -86,10 +109,17 @@ class FeedlyRssSpider(Spider):
             'unreadOnly': 'false',
         }
 
+    def start_requests(self):
+        return self.search_for_feed(self._query, self.start_feed)
+
+    def get_streams_url(self, feed_id, **params):
+        return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
+
+    @with_authorization
     def search_for_feed(self, query, callback, **kwargs):
         cb_kwargs = kwargs.pop('cb_kwargs', {})
         cb_kwargs['callback'] = callback
-        return Request(
+        yield Request(
             feedly.build_api_url('search', query=query),
             callback=self.parse_search_result,
             cb_kwargs=cb_kwargs,
@@ -102,9 +132,6 @@ class FeedlyRssSpider(Spider):
             yield from callback([], **kwargs)
             return
         yield from callback([feed['feedId'] for feed in res['results']], **kwargs)
-
-    def start_requests(self):
-        return [self.search_for_feed(self._query, self.start_feed)]
 
     def start_feed(self, feed):
         if not feed:
@@ -124,6 +151,7 @@ class FeedlyRssSpider(Spider):
         self.logger.info(f'Loading from {feed}')
         yield from self.next_page({'id': feed}, depth=0, callback=self.parse)
 
+    @with_authorization
     def next_page(self, previous, depth=None, **kwargs):
         feed = previous['id']
         params = {}
@@ -134,9 +162,6 @@ class FeedlyRssSpider(Spider):
         if depth is not None:
             meta['depth'] = depth
         yield Request(self.get_streams_url(feed, **params), meta=meta, **kwargs)
-
-    def get_streams_url(self, feed_id, **params):
-        return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     def parse(self, response: TextResponse):
         res = _guard_json(response.text)
