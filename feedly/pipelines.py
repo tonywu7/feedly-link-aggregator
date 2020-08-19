@@ -20,14 +20,41 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import cProfile
 import logging
+from logging.config import dictConfig
 
 import simplejson as json
 
 from .feedly import FeedlyEntry
+from .logger import make_logging_config
 from .utils import json_converters
 
 log = logging.getLogger('feedly.pipeline')
+
+
+class ConfigLogging:
+    @classmethod
+    def from_crawler(cls, crawler):
+        dictConfig(make_logging_config(
+            'feedly',
+            formatter_style='standard',
+            formatter_colored=True,
+            level=crawler.settings.get('LOG_LEVEL') or 20,
+        ))
+        return cls()
+
+
+class CProfile:
+    def __init__(self):
+        self.pr = cProfile.Profile()
+
+    def open_spider(self, spider):
+        self.pr.enable()
+
+    def close_spider(self, spider):
+        self.pr.disable()
+        self.pr.print_stats(sort='tottime')
 
 
 class PeriodicSavePipeline:
@@ -37,10 +64,16 @@ class PeriodicSavePipeline:
         pipeline.stats = crawler.stats
         return pipeline
 
+    @staticmethod
+    def process(index):
+        return index
+
     def open_spider(self, spider):
         self.index = spider.index
         self.output = spider.output
         self._flush_watermark = spider._flush_watermark
+        if callable(getattr(spider, '_index_processor', None)):
+            self.process = spider._index_processor
 
     def close_spider(self, spider):
         self._flush()
@@ -52,7 +85,7 @@ class PeriodicSavePipeline:
         )
         with open(self.output.resolve(), 'w') as f:
             json.dump(
-                self.index, f,
+                (self.process(self.index)), f,
                 ensure_ascii=False, default=json_converters, for_json=True,
                 iterable_as_array=True,
             )
