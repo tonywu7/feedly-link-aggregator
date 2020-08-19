@@ -57,10 +57,16 @@ class SiteNetworkSpider(FeedlyRssSpider):
     EDGE_TRANSFORMS = {
         'hrefs': lambda c: list({tuple(h) for h in c}),
     }
+    DEFAULT_CONFIG = {
+        **FeedlyRssSpider.DEFAULT_CONFIG,
+        'depth': 0,
+        'overwrite': True,
+        'flush_watermark': 4096,
+    }
 
-    def __init__(self, name=None, *, depth, **kwargs):
-        super().__init__(name=name, overwrite=True, flush_watermark=kwargs.get('flush_watermark', 4096), **kwargs)
-        self.depth = int(depth)
+    def __init__(self, name=None, **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.depth = int(self._config['depth'])
         self._logstats_milestones = {
             'rss/node_count': 100,
             'rss/page_count': 4096,

@@ -23,8 +23,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
+from pprint import pformat
 from time import sleep
 from typing import List, Union
 from urllib.parse import unquote
@@ -33,6 +35,7 @@ import simplejson as json
 from scrapy import Spider
 from scrapy.exceptions import CloseSpider
 from scrapy.http import Request, TextResponse
+from scrapy.signals import spider_opened
 
 from .. import feedly
 from ..feedly import FeedlyEntry
@@ -73,18 +76,34 @@ class FeedlyRssSpider(Spider):
         },
     }
 
-    def __init__(
-        self, name=None, *,
-        output: str, feed: str,
-        ranked='oldest', count=1000,
-        flush_watermark=5000, overwrite=False,
-        token=None,
-        **kwargs,
-    ):
+    DEFAULT_CONFIG = {
+        'output': f'{datetime.now(tz=timezone.utc).isoformat()}.crawl.json',
+        'feed': 'https://xkcd.com/atom.xml',
+        'ranked': 'oldest',
+        'count': 1000,
+        'flush_watermark': 5000,
+        'overwrite': False,
+        'token': None,
+    }
+
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        spider = super().from_crawler(crawler, *args, **kwargs)
+        crawler.signals.connect(spider.open_spider, spider_opened)
+        return spider
+
+    def __init__(self, name=None, profile=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
-        output = Path(output)
-        if output.exists() and not overwrite:
+        config = {**self.DEFAULT_CONFIG, 'profile': profile}
+        if profile:
+            with open(profile, 'r') as f:
+                profile: JSONDict = json.load(f)
+                config.update(profile)
+        config.update(kwargs)
+
+        output = Path(config['output'])
+        if output.exists() and not config['overwrite']:
             self.logger.error(f'{output} already exists, not overwriting.')
             raise CloseSpider('file_exists')
         self.output = output
@@ -94,20 +113,24 @@ class FeedlyRssSpider(Spider):
             'resources': HyperlinkStore(),
         }
         self.index: JSONDict = index
-        self._query = unquote(feed)
-        self._flush_watermark = int(flush_watermark)
+        self._query = unquote(config['feed'])
+        self._flush_watermark = int(config['flush_watermark'])
         self._logstats_milestones = {
             'rss/page_count': 1000,
             'rss/resource_count': 5000,
         }
 
-        self.token = token
+        self.token = config['token']
         self.api_base_params = {
-            'count': int(count),
-            'ranked': ranked,
+            'count': int(config['count']),
+            'ranked': config['ranked'],
             'similar': 'true',
             'unreadOnly': 'false',
         }
+        self._config = config
+
+    def open_spider(self, spider):
+        self.logger.info(f'Spider parameters:\n{pformat(self._config)}')
 
     def start_requests(self):
         return self.search_for_feed(self._query, self.start_feed)
