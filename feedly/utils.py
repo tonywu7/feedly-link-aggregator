@@ -22,19 +22,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable
 from datetime import datetime, timezone
 from hashlib import sha1
-from typing import Any, Dict, List, Set, Tuple, Union
-from urllib.parse import urlsplit
+from typing import Any, Dict, List, Tuple, Union
+from urllib.parse import SplitResult, urlsplit
 
 from scrapy.http import TextResponse
 
+from .datastructures import KeywordCollection, KeywordStore
+
 JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONType']]
 JSONDict = Dict[str, JSONType]
-
-Keywords = Set[Hashable]
-KeywordCollection = Dict[Hashable, Hashable]
 
 
 def parse_html(domstring, url='about:blank') -> TextResponse:
@@ -93,3 +91,45 @@ def ensure_collection(supplier):
             return supplier()
         return supplier(obj)
     return converter
+
+
+def path_only(url: SplitResult) -> str:
+    return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
+
+
+class HyperlinkStore(KeywordStore):
+    TARGET_ATTRS = {'src', 'href', 'data-src', 'data-href'}
+
+    def __init__(self, serialized: JSONDict = None):
+        super().__init__()
+        self._index: Dict[int, str]
+        if serialized:
+            self._deserialize(serialized)
+
+    def _deserialize(self, dict_: JSONDict):
+        for k, v in dict_.items():
+            hash_ = hash(k)
+            self._index[hash_] = k
+            self._taggings[hash_] = {c: set(ls) for c, ls in v.items()}
+
+    def parse_html(self, source, markup, **kwargs):
+        markup = parse_html(markup)
+        for attrib in self.TARGET_ATTRS:
+            html_tags = markup.css(f'[{attrib}]')
+            for tag in html_tags:
+                url = tag.attrib.get(attrib)
+                if not is_absolute_http(url):
+                    continue
+                url = ensure_protocol(url)
+
+                keywords: KeywordCollection = {
+                    'source': {source},
+                    'domain': set(domain_parents(urlsplit(url).netloc)),
+                    'tag': set(),
+                    'id': set(),
+                    'class': set(),
+                }
+                keywords['tag'].add(tag.xpath('name()').get())
+                keywords['id'] |= set(tag.xpath('@id').getall())
+                keywords['class'] |= set(tag.xpath('@class').getall())
+                self.put(url, **keywords, **kwargs)

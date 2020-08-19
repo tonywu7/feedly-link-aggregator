@@ -25,7 +25,7 @@ from functools import reduce
 import click
 import simplejson as json
 
-from .datastructures import HyperlinkStore
+from .utils import HyperlinkStore
 
 
 def load_json(path):
@@ -114,7 +114,7 @@ def collect_urls(crawl_data, include, exclude):
 @click.argument('crawl_data', type=click.Path(exists=True))
 def collect_keywords(crawl_data):
     store: HyperlinkStore = load_json(crawl_data)
-    items = store.items()
+    _, items = store.items()
     print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keyword', set()) for item in items]))))
 
 

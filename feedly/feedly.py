@@ -30,7 +30,8 @@ import attr
 from attr.converters import optional
 
 from . import utils
-from .utils import JSONDict, Keywords
+from .datastructures import Keywords
+from .utils import JSONDict
 
 API_BASE = {
     'scheme': 'https',

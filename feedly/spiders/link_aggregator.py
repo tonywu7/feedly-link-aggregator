@@ -35,8 +35,7 @@ from scrapy.http import Request, TextResponse
 
 from .. import feedly
 from ..feedly import FeedlyEntry
-from ..datastructures import HyperlinkStore
-from ..utils import JSONDict
+from ..utils import JSONDict, HyperlinkStore
 
 log = logging.getLogger('feedly.spiders')
 
@@ -57,9 +56,6 @@ class FeedlyRssSpider(Spider):
             'scrapy.spidermiddlewares.depth.DepthMiddleware': 100,
             'feedly.spiders.link_aggregator.FeedEntryMiddleware': 800,
             'feedly.spiders.link_aggregator.FeedResourceMiddleware': 900,
-        },
-        'ITEM_PIPELINES': {
-            'feedly.pipelines.PeriodicSavePipeline': 900,
         },
     }
 

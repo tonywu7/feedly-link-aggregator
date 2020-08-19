@@ -67,9 +67,11 @@ ROBOTSTXT_OBEY = True
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
-# ITEM_PIPELINES = {
-#    'feedly.pipelines.FeedlyPipeline': 300,
-# }
+ITEM_PIPELINES = {
+    'feedly.pipelines.ConfigLogging': 100,
+    'feedly.pipelines.PeriodicSavePipeline': 900,
+    'feedly.pipelines.CProfile': 1000,
+}
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html

@@ -22,15 +22,12 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 from collections.abc import Hashable
 from collections.abc import Set as SetCollection
+from typing import Dict, Set, Tuple
 
-from typing import Dict
-
-from . import utils
-from .utils import JSONDict, KeywordCollection
+Keywords = Set[Hashable]
+KeywordCollection = Dict[Hashable, Hashable]
 
 
 class KeywordStore:
@@ -59,9 +56,9 @@ class KeywordStore:
     def keywords(self, item):
         return self._taggings.get(hash(item), {})
 
-    def items(self, **kws: Dict[Hashable, Hashable]) -> KeywordCollection:
+    def items(self, **kws: Dict[Hashable, Hashable]) -> Tuple[Hashable, KeywordCollection]:
         for hash_ in self._get_hashes(**kws):
-            yield self._taggings[hash_]
+            yield self._index[hash_], self._taggings[hash_]
 
     def put(self, item: Hashable, **kws: KeywordCollection):
         hash_ = hash(item)
@@ -136,41 +133,3 @@ class KeywordStore:
 
     def for_json(self):
         return {item: self._taggings[hash_] for hash_, item in self._index.items()}
-
-
-class HyperlinkStore(KeywordStore):
-    TARGET_ATTRS = {'src', 'href', 'data-src', 'data-href'}
-
-    def __init__(self, serialized: JSONDict = None):
-        super().__init__()
-        self._index: Dict[int, str]
-        if serialized:
-            self._deserialize(serialized)
-
-    def _deserialize(self, dict_: JSONDict):
-        for k, v in dict_.items():
-            hash_ = hash(k)
-            self._index[hash_] = k
-            self._taggings[hash_] = {c: set(ls) for c, ls in v.items()}
-
-    def parse_html(self, source, markup, **kwargs):
-        markup = utils.parse_html(markup)
-        for attrib in self.TARGET_ATTRS:
-            html_tags = markup.css(f'[{attrib}]')
-            for tag in html_tags:
-                url = tag.attrib.get(attrib)
-                if not utils.is_absolute_http(url):
-                    continue
-                url = utils.ensure_protocol(url)
-
-                keywords: KeywordCollection = {
-                    'source': {source},
-                    'domain': set(utils.domain_parents(urlsplit(url).netloc)),
-                    'tag': set(),
-                    'id': set(),
-                    'class': set(),
-                }
-                keywords['tag'].add(tag.xpath('name()').get())
-                keywords['id'] |= set(tag.xpath('@id').getall())
-                keywords['class'] |= set(tag.xpath('@class').getall())
-                self.put(url, **keywords, **kwargs)
