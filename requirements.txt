@@ -1,4 +1,6 @@
 click==7.1.2
+networkx==2.4
+  decorator==4.4.2
 Scrapy==2.3.0
   cryptography==3.0
     cffi==1.14.1
