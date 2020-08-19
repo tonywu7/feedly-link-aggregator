@@ -55,17 +55,17 @@ def build_api_url(endpoint, **params):
 @attr.s(kw_only=True, frozen=True)
 class FeedlyEntry:
     _id: str = attr.ib(default=None)
-    id_hash: str = attr.ib(default=attr.Factory(lambda s: s._id and utils.sha1sum(s._id), takes_self=True))
+    id_hash: str = attr.ib(default=attr.Factory(lambda s: s._id and utils.sha1sum(s._id), takes_self=True), repr=False)
 
     url: str = attr.ib()
     published: datetime = attr.ib(converter=utils.datetime_converters)
-    updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters))
-    origin: Dict[str, str] = attr.ib(factory=dict)
+    updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters), repr=False)
+    origin: Dict[str, str] = attr.ib(factory=dict, repr=False)
 
-    keywords: Keywords = attr.ib(converter=utils.ensure_collection(set), factory=set)
-    author: Optional[str] = attr.ib(default=None)
+    keywords: Keywords = attr.ib(converter=utils.ensure_collection(set), factory=set, repr=False)
+    author: Optional[str] = attr.ib(default=None, repr=False)
 
-    markup: Dict[str, str] = attr.ib(factory=dict)
+    markup: Dict[str, str] = attr.ib(factory=dict, repr=False)
 
     @classmethod
     def from_upstream(cls, item: JSONDict) -> FeedlyEntry:

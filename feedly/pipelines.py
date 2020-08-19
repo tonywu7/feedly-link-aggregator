@@ -44,6 +44,9 @@ class ConfigLogging:
         ))
         return cls()
 
+    def process_item(self, item, spider):
+        return item
+
 
 class CProfile:
     def __init__(self):
@@ -55,6 +58,9 @@ class CProfile:
     def close_spider(self, spider):
         self.pr.disable()
         self.pr.print_stats(sort='tottime')
+
+    def process_item(self, item, spider):
+        return item
 
 
 class PeriodicSavePipeline:
@@ -80,8 +86,8 @@ class PeriodicSavePipeline:
 
     def _flush(self):
         log.info(
-            f'Saving progress ... got {self.stats.get_value("rss/item_count")} items, '
-            f'{self.stats.get_value("rss/resource_count")} external links',
+            f'Saving progress ... got {self.stats.get_value("rss/page_count", 0)} items, '
+            f'{self.stats.get_value("rss/resource_count", 0)} external links',
         )
         with open(self.output.resolve(), 'w') as f:
             json.dump(
@@ -93,8 +99,39 @@ class PeriodicSavePipeline:
     def process_item(self, item: FeedlyEntry, spider):
         if (
             self._flush_watermark
-            and self.stats.get_value('rss/item_count') - self.stats.get_value('rss/item_milestone') >= self._flush_watermark
+            and self.stats.get_value('rss/page_count', 0) - self.stats.get_value('mileage/rss/page_count', 0) >= self._flush_watermark
         ):
             self._flush()
-            self.stats.set_value('rss/item_milestone', self.stats.get_value('rss/item_count'))
+            self.stats.set_value('mileage/rss/page_count', self.stats.get_value('rss/page_count', 0))
+        return item
+
+
+class StatsPipeline:
+    def __init__(self, crawler):
+        self.stats = crawler.stats
+        self.log = logging.getLogger('feedly.stats')
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler)
+
+    def open_spider(self, spider):
+        self.milestones = getattr(spider, '_logstats_milestones', {})
+        for k in self.milestones:
+            self.stats.set_value(k, 0)
+
+    def process_item(self, item, spider):
+        report = False
+        stats = {}
+        for k, v in self.milestones.items():
+            s = self.stats.get_value(k, 0)
+            stats[k] = s
+            if s - self.stats.get_value(f'milestones/{k}', 0) >= v:
+                self.stats.set_value(f'milestones/{k}', s)
+                report = True
+        if report:
+            self.log.info('Statistics:')
+            for k, v in stats.items():
+                self.log.info(f'  {k}: {v}')
+                self.stats.set_value(f'milestones/{k}', v)
         return item
