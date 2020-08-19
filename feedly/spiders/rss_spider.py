@@ -48,14 +48,13 @@ def _guard_json(text: str) -> JSONDict:
 
 
 class FeedlyRssSpider(Spider):
-    name = 'link_aggregator'
+    name = 'feed_content'
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
         'SPIDER_MIDDLEWARES': {
-            'scrapy.spidermiddlewares.depth.DepthMiddleware': 100,
-            'feedly.spiders.link_aggregator.FeedEntryMiddleware': 800,
-            'feedly.spiders.link_aggregator.FeedResourceMiddleware': 900,
+            'feedly.spiders.rss_spider.FeedEntryMiddleware': 900,
+            'feedly.spiders.rss_spider.FeedResourceMiddleware': 800,
         },
     }
 
@@ -75,6 +74,10 @@ class FeedlyRssSpider(Spider):
         self.index: JSONDict = index
         self._query = unquote(feed)
         self._flush_watermark = int(flush_watermark)
+        self._logstats_milestones = {
+            'rss/page_count': 1000,
+            'rss/resource_count': 5000,
+        }
 
         self.api_base_params = {
             'count': int(count),
@@ -84,19 +87,21 @@ class FeedlyRssSpider(Spider):
         }
 
     def search_for_feed(self, query, callback, **kwargs):
+        cb_kwargs = kwargs.pop('cb_kwargs', {})
+        cb_kwargs['callback'] = callback
         return Request(
             feedly.build_api_url('search', query=query),
             callback=self.parse_search_result,
-            cb_kwargs={'callback': callback},
+            cb_kwargs=cb_kwargs,
             **kwargs,
         )
 
-    def parse_search_result(self, response: TextResponse, *, callback):
+    def parse_search_result(self, response: TextResponse, *, callback, **kwargs):
         res = _guard_json(response.text)
         if not res.get('results'):
-            yield from callback([])
+            yield from callback([], **kwargs)
             return
-        yield from callback([feed['feedId'].split('/', 1) for feed in res['results']])
+        yield from callback([feed['feedId'] for feed in res['results']], **kwargs)
 
     def start_requests(self):
         return [self.search_for_feed(self._query, self.start_feed)]
@@ -115,16 +120,20 @@ class FeedlyRssSpider(Spider):
             self.logger.critical('\n'.join(msg))
             sleep(5)
             return
-        feed = f'{feed[0][0]}/{feed[0][1]}'
-        yield from self.next_page({'id': feed}, callback=self.parse)
+        feed = feed[0]
+        self.logger.info(f'Loading from {feed}')
+        yield from self.next_page({'id': feed}, depth=0, callback=self.parse)
 
-    def next_page(self, previous, **kwargs):
+    def next_page(self, previous, depth=None, **kwargs):
         feed = previous['id']
         params = {}
         cont = previous.get('continuation')
         if cont:
             params['continuation'] = cont
-        yield Request(self.get_streams_url(feed, **params), **kwargs)
+        meta = kwargs.pop('meta', {})
+        if depth is not None:
+            meta['depth'] = depth
+        yield Request(self.get_streams_url(feed, **params), meta=meta, **kwargs)
 
     def get_streams_url(self, feed_id, **params):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
@@ -144,17 +153,14 @@ class FeedEntryMiddleware:
     def from_crawler(cls, crawler):
         m = cls()
         m.stats = crawler.stats
-        m.stats.set_value('rss/item_count', 0)
-        m.stats.set_value('rss/item_milestone', 0)
         return m
 
     def process_spider_output(self, response, result, spider):
         for item in result:
-            if not isinstance(item, FeedlyEntry):
-                yield item
-                continue
-            self.stats.inc_value('rss/item_count')
-            spider.index['items'][item.id_hash] = item
+            if isinstance(item, FeedlyEntry):
+                self.stats.inc_value('rss/page_count')
+                spider.index['items'][item.id_hash] = item
+            yield item
 
 
 class FeedResourceMiddleware:
@@ -162,21 +168,18 @@ class FeedResourceMiddleware:
     def from_crawler(cls, crawler):
         m = cls()
         m.stats = crawler.stats
-        m.stats.set_value('rss/resource_count', 0)
         return m
 
     def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: FeedlyRssSpider):
         store = spider.index['resources']
         for item in result:
-            if not isinstance(item, FeedlyEntry):
-                yield item
-                continue
-            item: FeedlyEntry
-            for k, v in item.markup.items():
-                store.parse_html(
-                    item.url, v,
-                    feedly_id=item.id_hash,
-                    feedly_keyword=item.keywords,
-                )
-            self.stats.set_value('rss/resource_count', len(store))
+            if isinstance(item, FeedlyEntry):
+                item: FeedlyEntry
+                for k, v in item.markup.items():
+                    store.parse_html(
+                        item.url, v,
+                        feedly_id=item.id_hash,
+                        feedly_keyword=item.keywords,
+                    )
+                self.stats.set_value('rss/resource_count', len(store))
             yield item
