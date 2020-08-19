@@ -23,9 +23,10 @@
 import logging
 
 from scrapy.http import Response
+from scrapy.exceptions import IgnoreRequest
 
 
-class RateLimitMiddleware:
+class HTTPErrorMiddleware:
     def __init__(self, crawler):
         self.crawler = crawler
         self.log = logging.getLogger('feedly.ratelimiting')
@@ -35,9 +36,16 @@ class RateLimitMiddleware:
         return cls(crawler)
 
     def process_response(self, request, response: Response, spider):
+        if response.status == 401:
+            self.log.warn('Server returned HTTP 401 Unauthorized')
+            self.log.warn('This is because you are accessing an API that requires authorization, and')
+            self.log.warn('your either did not provide, or provided a wrong access token.')
+            self.log.warn(f'URL: {request.url}')
+            raise IgnoreRequest()
         if response.status == 429:
             self.log.critical('Server returned HTTP 429 Too Many Requests.')
             self.log.critical('Your IP address is being rate-limited.')
             self.log.critical('Crawler will now stop.')
             self.crawler.engine.close_spider(spider, 'rate_limited')
+            raise IgnoreRequest()
         return response
