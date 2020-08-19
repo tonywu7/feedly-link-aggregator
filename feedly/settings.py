@@ -55,9 +55,9 @@ ROBOTSTXT_OBEY = True
 
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
-# DOWNLOADER_MIDDLEWARES = {
-#    'feedly.middlewares.FeedlyDownloaderMiddleware': 543,
-# }
+DOWNLOADER_MIDDLEWARES = {
+    'feedly.middlewares.RateLimitMiddleware': 500,
+}
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
@@ -70,7 +70,8 @@ ROBOTSTXT_OBEY = True
 ITEM_PIPELINES = {
     'feedly.pipelines.ConfigLogging': 100,
     'feedly.pipelines.PeriodicSavePipeline': 900,
-    'feedly.pipelines.CProfile': 1000,
+    'feedly.pipelines.StatsPipeline': 950,
+    # 'feedly.pipelines.CProfile': 1000,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
