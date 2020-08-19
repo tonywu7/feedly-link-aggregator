@@ -1,0 +1,8 @@
+{
+    "templates": [
+        "http://%(domain)s/rss",
+        "https://%(domain)s/rss",
+        "http://%(domain)s/rss#-_-",
+        "https://%(domain)s/rss#-_-"
+    ]
+}
