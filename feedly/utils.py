@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import MutableSequence, MutableSet, MutableMapping
 from datetime import datetime, timezone
 from hashlib import sha1
 from typing import Any, Dict, List, Tuple, Union
@@ -95,6 +97,35 @@ def ensure_collection(supplier):
 
 def path_only(url: SplitResult) -> str:
     return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
+
+
+def falsy(v):
+    return v in {0, None, False, '0', 'None', 'none', 'False', 'false', 'null', 'undefined', 'NaN'}
+
+
+def wait(t):
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < t:
+        time.sleep(0.1)
+
+
+def compose_mappings(*mappings):
+    base = {}
+    base.update(mappings[0])
+    for m in mappings[1:]:
+        for k, v in m.items():
+            if k in base and type(base[k]) is type(v):
+                if isinstance(v, MutableMapping):
+                    base[k] = compose_mappings(base[k], v)
+                elif isinstance(v, MutableSet):
+                    base[k] |= v
+                elif isinstance(v, MutableSequence):
+                    base[k].extend(v)
+                else:
+                    base[k] = v
+            else:
+                base[k] = v
+    return base
 
 
 class HyperlinkStore(KeywordStore):

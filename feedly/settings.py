@@ -69,7 +69,6 @@ DOWNLOADER_MIDDLEWARES = {
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
     'feedly.pipelines.ConfigLogging': 100,
-    'feedly.pipelines.PeriodicSavePipeline': 900,
     'feedly.pipelines.StatsPipeline': 950,
     # 'feedly.pipelines.CProfile': 1000,
 }
@@ -83,7 +82,7 @@ AUTOTHROTTLE_START_DELAY = 1
 AUTOTHROTTLE_MAX_DELAY = 60
 # The average number of requests Scrapy should be sending in parallel to
 # each remote server
-AUTOTHROTTLE_TARGET_CONCURRENCY = 1.0
+AUTOTHROTTLE_TARGET_CONCURRENCY = 0.8
 # Enable showing throttling stats for every response received:
 AUTOTHROTTLE_DEBUG = False
 

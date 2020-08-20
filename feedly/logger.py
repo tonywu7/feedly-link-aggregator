@@ -22,8 +22,9 @@
 
 import logging
 import sys
-from collections.abc import Mapping
 from typing import Dict, Union
+
+from .utils import compose_mappings
 
 try:
     import termcolor
@@ -209,18 +210,6 @@ logging_config_template = {
 }
 
 
-def overlay_maps(*mappings):
-    base = {}
-    base.update(mappings[0])
-    for m in mappings[1:]:
-        for k, v in m.items():
-            if isinstance(base.get(k, {}), Mapping) and isinstance(v, Mapping):
-                base[k] = overlay_maps(base.get(k, {}), v)
-            else:
-                base[k] = v
-    return base
-
-
 def make_logging_config(app_name, **config):
     level = config.get('level', logging.INFO)
 
@@ -234,7 +223,7 @@ def make_logging_config(app_name, **config):
     formatter = formatter_styles[formatter_name][color_mode]
 
     if color_mode == 'colored' and config.get('logger_color_rules'):
-        formatter = overlay_maps(
+        formatter = compose_mappings(
             formatter,
             {'stylesheet': {'name': {'color': (
                 _conditional_color('name', config.get('logger_color_rules'))
@@ -262,7 +251,7 @@ def make_logging_config(app_name, **config):
     }
 
     override = config.get('config_override', app_logging_config)
-    log_config = overlay_maps(logging_config_template, override)
+    log_config = compose_mappings(logging_config_template, override)
     return log_config
 
 

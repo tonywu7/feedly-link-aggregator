@@ -114,7 +114,7 @@ class FeedlyEntry:
         visual = item.get('visual')
         if visual:
             u = visual.get('url')
-            if u and u != 'none':
+            if not utils.falsy(u):
                 entry.markup['visual'] = f'<img src="{u}">'
 
     @staticmethod

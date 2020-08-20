@@ -1,8 +1,11 @@
 {
-    "templates": [
-        "http://%(domain)s/rss",
-        "https://%(domain)s/rss",
-        "http://%(domain)s/rss#-_-",
-        "https://%(domain)s/rss#-_-"
-    ]
+    "domains": ["tumblr.com"],
+    "templates": {
+        ".*\\.tumblr\\.com/?.*": {
+            "http://%(netloc)s/rss": 100,
+            "http://%(netloc)s/rss#_=_": 200,
+            "https://%(netloc)s/rss": 300,
+            "https://%(netloc)s/rss#_=_": 400
+        }
+    }
 }
