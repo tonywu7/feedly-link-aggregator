@@ -23,13 +23,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from pprint import pformat
-from time import sleep
-from typing import List, Union
-from urllib.parse import unquote
+from typing import Dict, List, Pattern, Union
+from urllib.parse import unquote, urlsplit
 
 import simplejson as json
 from scrapy import Spider
@@ -38,8 +38,9 @@ from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
 
 from .. import feedly
+from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
-from ..utils import JSONDict, HyperlinkStore
+from ..utils import JSONDict, HyperlinkStore, falsy, compose_mappings, wait
 
 log = logging.getLogger('feedly.spiders')
 
@@ -53,7 +54,7 @@ def _guard_json(text: str) -> JSONDict:
 
 def with_authorization(func):
     @wraps(func)
-    def add_header(self: FeedlyRssSpider, *args, **kwargs):
+    def add_header(self: FeedlyRSSSpider, *args, **kwargs):
         g = func(self, *args, **kwargs)
         if self.token:
             for req in g:
@@ -65,14 +66,17 @@ def with_authorization(func):
     return add_header
 
 
-class FeedlyRssSpider(Spider):
+class FeedlyRSSSpider(Spider):
     name = 'feed_content'
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
         'SPIDER_MIDDLEWARES': {
-            'feedly.spiders.rss_spider.FeedEntryMiddleware': 900,
+            'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
+            'feedly.middlewares.ConditionalDepthMiddleware': 100,
+            'feedly.middlewares.FeedCompletionMiddleware': 500,
             'feedly.spiders.rss_spider.FeedResourceMiddleware': 800,
+            'feedly.spiders.rss_spider.FeedEntryMiddleware': 900,
         },
     }
 
@@ -81,9 +85,14 @@ class FeedlyRssSpider(Spider):
         'feed': 'https://xkcd.com/atom.xml',
         'ranked': 'oldest',
         'count': 1000,
-        'flush_watermark': 5000,
         'overwrite': False,
         'token': None,
+        'fuzzy': False,
+        'templates': {
+            '.*': {
+                '%(original)s': 999,
+            },
+        },
     }
 
     @classmethod
@@ -95,15 +104,15 @@ class FeedlyRssSpider(Spider):
     def __init__(self, name=None, profile=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
-        config = {**self.DEFAULT_CONFIG, 'profile': profile}
         if profile:
             with open(profile, 'r') as f:
                 profile: JSONDict = json.load(f)
-                config.update(profile)
-        config.update(kwargs)
+        else:
+            profile = {}
+        config = compose_mappings(self.DEFAULT_CONFIG, profile, kwargs)
 
         output = Path(config['output'])
-        if output.exists() and not config['overwrite']:
+        if output.exists() and falsy(config['overwrite']):
             self.logger.error(f'{output} already exists, not overwriting.')
             raise CloseSpider('file_exists')
         self.output = output
@@ -113,12 +122,24 @@ class FeedlyRssSpider(Spider):
             'resources': HyperlinkStore(),
         }
         self.index: JSONDict = index
+
         self._query = unquote(config['feed'])
-        self._flush_watermark = int(config['flush_watermark'])
-        self._logstats_milestones = {
-            'rss/page_count': 1000,
-            'rss/resource_count': 5000,
+
+        t = config.get('templates', '{}')
+        if isinstance(t, str):
+            config['templates'] = json.loads(t)
+        self._url_templates: Dict[Pattern[str], JSONDict] = {re.compile(k): v for k, v in config['templates'].items()}
+
+        self._fuzzy = config.get('fuzzy')
+
+        self._statspipeline_config = {
+            'logstats': {
+                'rss/page_count': 1000,
+                'rss/resource_count': 5000,
+            },
+            'autosave': 'rss/page_count',
         }
+
 
         self.token = config['token']
         self.api_base_params = {
@@ -133,21 +154,35 @@ class FeedlyRssSpider(Spider):
         self.logger.info(f'Spider parameters:\n{pformat(self._config)}')
 
     def start_requests(self):
-        return self.search_for_feed(self._query, self.start_feed)
+        return self.try_feed_urls(self._query, search_callback=self.single_feed_only_with_prompt)
 
     def get_streams_url(self, feed_id, **params):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     @with_authorization
-    def search_for_feed(self, query, callback, **kwargs):
-        cb_kwargs = kwargs.pop('cb_kwargs', {})
-        cb_kwargs['callback'] = callback
-        yield Request(
-            feedly.build_api_url('search', query=query),
-            callback=self.parse_search_result,
-            cb_kwargs=cb_kwargs,
-            **kwargs,
-        )
+    def try_feed_urls(self, query, *, search_callback, search_kwargs=None, **kwargs):
+        effective_templates = {k: v for k, v in self._url_templates.items() if k.match(query)}
+        query_parsed = urlsplit(query)
+        specifiers = {**query_parsed._asdict(), 'original': query_parsed.geturl()}
+        urls = [t % specifiers for _, t in sorted(
+            (priority, tmpl)
+            for pattern, tmpls in effective_templates.items()
+            for tmpl, priority in tmpls.items()
+        )]
+
+        for u in urls:
+            yield from self.next_page(
+                {'id': f'feed/{u}'}, callback=self.parse_feed,
+                meta={
+                    **kwargs.pop('meta', {}),
+                    'inc_depth': True,
+                    'candidate_id': u,
+                    'candidate_for': query,
+                    'search_callback': search_callback,
+                    'search_kwargs': search_kwargs or {},
+                }, initial=True,
+                **kwargs,
+            )
 
     def parse_search_result(self, response: TextResponse, *, callback, **kwargs):
         res = _guard_json(response.text)
@@ -156,10 +191,10 @@ class FeedlyRssSpider(Spider):
             return
         yield from callback([feed['feedId'] for feed in res['results']], **kwargs)
 
-    def start_feed(self, feed):
+    def single_feed_only_with_prompt(self, feed, **kwargs):
         if not feed:
             self.logger.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
-            sleep(5)
+            wait(5)
             return
         if len(feed) > 1:
             msg = [
@@ -168,32 +203,50 @@ class FeedlyRssSpider(Spider):
                 'Please run scrapy again using one of the values above. Crawler will now close.',
             ]
             self.logger.critical('\n'.join(msg))
-            sleep(5)
+            wait(5)
             return
         feed = feed[0]
         self.logger.info(f'Loading from {feed}')
-        yield from self.next_page({'id': feed}, depth=0, callback=self.parse)
+        yield from self.next_page({'id': feed}, callback=self.parse_feed, initial=True, **kwargs)
 
     @with_authorization
-    def next_page(self, previous, depth=None, **kwargs):
-        feed = previous['id']
+    def next_page(self, data, response: TextResponse = None, initial=False, **kwargs):
+        feed = data['id']
+        if response:
+            meta = {**response.meta}
+        else:
+            meta = {}
+        meta.update(kwargs.pop('meta', {}))
+        if not initial:
+            meta.pop('inc_depth', None)
+
         params = {}
-        cont = previous.get('continuation')
+        cont = data.get('continuation')
         if cont:
             params['continuation'] = cont
-        meta = kwargs.pop('meta', {})
-        if depth is not None:
-            meta['depth'] = depth
-        yield Request(self.get_streams_url(feed, **params), meta=meta, **kwargs)
+        elif not initial:
+            raise FeedExhausted(response)
 
-    def parse(self, response: TextResponse):
-        res = _guard_json(response.text)
-        for item in res.get('items', []):
+        url = self.get_streams_url(feed, **params)
+        if response:
+            yield response.request.replace(url=url, meta=meta)
+            return
+        yield Request(url, meta=meta, **kwargs)
+
+    def parse_feed(self, response: TextResponse):
+        data = _guard_json(response.text)
+        items = data.get('items')
+        if items:
+            yield {'valid_feed': response}
+
+        for item in items:
             entry = FeedlyEntry.from_upstream(item)
             if entry:
                 yield entry
+        yield from self.next_page(data, callback=self.parse_feed, response=response)
 
-        yield from self.next_page(res, callback=self.parse)
+    def parse(self, response, **kwargs):
+        return
 
 
 class FeedEntryMiddleware:
@@ -218,7 +271,7 @@ class FeedResourceMiddleware:
         m.stats = crawler.stats
         return m
 
-    def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: FeedlyRssSpider):
+    def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: FeedlyRSSSpider):
         store = spider.index['resources']
         for item in result:
             if isinstance(item, FeedlyEntry):
