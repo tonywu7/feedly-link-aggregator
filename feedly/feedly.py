@@ -98,9 +98,9 @@ class FeedlyEntry:
         origin = item.get('origin')
         if origin:
             return {
-                'feed': origin['streamId'].split('/', 1)[1],
-                'title': origin['title'],
-                'homepage': origin['htmlUrl'],
+                'feed': origin.get('streamId', '/').split('/', 1)[1],
+                'title': origin.get('title'),
+                'homepage': origin.get('htmlUrl'),
             }
 
     @staticmethod

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from pprint import pformat
@@ -38,9 +38,10 @@ from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
 
 from .. import feedly
+from ..config import Config
 from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
-from ..utils import JSONDict, HyperlinkStore, falsy, compose_mappings, wait
+from ..utils import JSONDict, HyperlinkStore, falsy, wait
 
 log = logging.getLogger('feedly.spiders')
 
@@ -56,7 +57,7 @@ def with_authorization(func):
     @wraps(func)
     def add_header(self: FeedlyRSSSpider, *args, **kwargs):
         g = func(self, *args, **kwargs)
-        if self.token:
+        if self._token:
             for req in g:
                 if isinstance(req, Request):
                     req.headers['Authorization'] = f'OAuth {self.token}'
@@ -80,20 +81,24 @@ class FeedlyRSSSpider(Spider):
         },
     }
 
-    DEFAULT_CONFIG = {
-        'output': f'{datetime.now(tz=timezone.utc).isoformat()}.crawl.json',
-        'feed': 'https://xkcd.com/atom.xml',
-        'ranked': 'oldest',
-        'count': 1000,
-        'overwrite': False,
-        'token': None,
-        'fuzzy': False,
-        'templates': {
-            '.*': {
+    class SpiderConfig:
+        OUTPUT = f'./{datetime.now().strftime("%Y%m%d%H%M%S")}.crawl.json'
+        OVERWRITE = False
+
+        FEED = 'https://xkcd.com/atom.xml'
+        FEED_TEMPLATES = {
+            r'.*': {
                 '%(original)s': 999,
             },
-        },
-    }
+        }
+
+        DOWNLOAD_ORDER = 'oldest'
+        DOWNLOAD_PER_BATCH = 1000
+
+        FEEDLY_FUZZY_SEARCH = False
+        FEEDLY_ACCESS_TOKEN = None
+
+        STREAM_ID_PREFIX = 'feed/'
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -104,18 +109,17 @@ class FeedlyRSSSpider(Spider):
     def __init__(self, name=None, profile=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
+        config = Config()
+        config.from_object(self.SpiderConfig)
         if profile:
-            with open(profile, 'r') as f:
-                profile: JSONDict = json.load(f)
-        else:
-            profile = {}
-        config = compose_mappings(self.DEFAULT_CONFIG, profile, kwargs)
+            config.from_pyfile(profile)
+        config.merge(kwargs)
 
         output = Path(config['output'])
         if output.exists() and falsy(config['overwrite']):
             self.logger.error(f'{output} already exists, not overwriting.')
             raise CloseSpider('file_exists')
-        self.output = output
+        self.output = config['output'] = output
 
         index = {
             'items': {},
@@ -123,14 +127,13 @@ class FeedlyRSSSpider(Spider):
         }
         self.index: JSONDict = index
 
-        self._query = unquote(config['feed'])
+        self._query = config['feed'] = unquote(config['feed'])
+        self._fuzzy = config['feedly_fuzzy_search']
+        self._token = config['feedly_access_token']
 
-        t = config.get('templates', '{}')
-        if isinstance(t, str):
-            config['templates'] = json.loads(t)
-        self._url_templates: Dict[Pattern[str], JSONDict] = {re.compile(k): v for k, v in config['templates'].items()}
-
-        self._fuzzy = config.get('fuzzy')
+        templates = {re.compile(k): v for k, v in config['feed_templates'].items()}
+        config['feed_templates'] = templates
+        self._url_templates: Dict[Pattern[str], JSONDict] = templates
 
         self._statspipeline_config = {
             'logstats': {
@@ -140,11 +143,9 @@ class FeedlyRSSSpider(Spider):
             'autosave': 'rss/page_count',
         }
 
-
-        self.token = config['token']
         self.api_base_params = {
-            'count': int(config['count']),
-            'ranked': config['ranked'],
+            'count': int(config['download_per_batch']),
+            'ranked': config['download_order'],
             'similar': 'true',
             'unreadOnly': 'false',
         }
@@ -154,13 +155,13 @@ class FeedlyRSSSpider(Spider):
         self.logger.info(f'Spider parameters:\n{pformat(self._config)}')
 
     def start_requests(self):
-        return self.try_feed_urls(self._query, search_callback=self.single_feed_only_with_prompt)
+        return self.try_feeds(self._query, prefix=self._config['stream_id_prefix'], search_callback=self.single_feed_only_with_prompt)
 
     def get_streams_url(self, feed_id, **params):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     @with_authorization
-    def try_feed_urls(self, query, *, search_callback, search_kwargs=None, **kwargs):
+    def try_feeds(self, query, *, prefix='feed/', search_callback, search_kwargs=None, **kwargs):
         effective_templates = {k: v for k, v in self._url_templates.items() if k.match(query)}
         query_parsed = urlsplit(query)
         specifiers = {**query_parsed._asdict(), 'original': query_parsed.geturl()}
@@ -172,7 +173,7 @@ class FeedlyRSSSpider(Spider):
 
         for u in urls:
             yield from self.next_page(
-                {'id': f'feed/{u}'}, callback=self.parse_feed,
+                {'id': f'{prefix}{u}'}, callback=self.parse_feed,
                 meta={
                     **kwargs.pop('meta', {}),
                     'inc_depth': True,
@@ -231,7 +232,7 @@ class FeedlyRSSSpider(Spider):
         if response:
             yield response.request.replace(url=url, meta=meta)
             return
-        yield Request(url, meta=meta, **kwargs)
+        yield Request(url, meta=meta, priority=1 if initial else 0, **kwargs)
 
     def parse_feed(self, response: TextResponse):
         data = _guard_json(response.text)
