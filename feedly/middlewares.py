@@ -22,11 +22,13 @@
 
 import logging
 from collections.abc import Mapping
-from typing import Dict, List, Union
+from typing import Callable, List
 
+from scrapy import Spider
 from scrapy.http import Request, Response
 from scrapy.exceptions import IgnoreRequest
 from scrapy.spidermiddlewares.depth import DepthMiddleware
+from scrapy.utils.url import url_is_from_any_domain
 
 from . import feedly
 from .exceptions import FeedExhausted
@@ -39,40 +41,90 @@ class ConditionalDepthMiddleware(DepthMiddleware):
         return result
 
 
+def filter_depth(request: Request, spider: Spider):
+    depth = request.meta.get('depth')
+    max_depth = spider.config['NETWORK_DEPTH']
+    if depth is not None and max_depth is not None:
+        if depth > max_depth:
+            return False
+    return True
+
+
+def filter_domains(request: Request, spider: Spider):
+    domains = spider.config['ALLOWED_DOMAINS']
+    feed_url = request.meta.get('feed_url')
+    if not feed_url or domains is None:
+        return True
+    return url_is_from_any_domain(feed_url, domains)
+
+
+class RequestFilterMiddleware:
+    DEFAULT_FILTERS = {
+        filter_domains: 300,
+        filter_depth: 700,
+    }
+
+    def __init__(self):
+        self.tests: List[Callable[[Request, Spider], bool]] = []
+        self._initialized = False
+
+    def init(self, spider: Spider):
+        tests = {**self.DEFAULT_FILTERS, **spider.config.get('REQUEST_FILTERS', {})}
+        self.tests = [t[0] for t in sorted(tests.items(), key=lambda t: t[1])]
+        self._initialized = True
+
+    def process_request(self, request: Request, spider):
+        if not self._initialized:
+            self.init(spider)
+        # print({k: k(request, spider) for k in self.tests})
+        if any((not t(request, spider)) for t in self.tests):
+            ignore = request.meta.get('if_ignore')
+            if ignore:
+                ignore()
+            raise IgnoreRequest()
+        proceed = request.meta.get('if_proceed')
+        if proceed:
+            proceed()
+        return None
+
+
 class FeedCompletionMiddleware:
     def __init__(self):
-        self.queries: Dict[str, Dict[str, Union[None, bool]]] = {}
         self.log = logging.getLogger('feedly.search')
 
     def process_spider_input(self, response: Response, spider):
-        meta, query, feed = self._unpack_meta(response)
-        if 'candidate_for' in meta:
-            self._record_query(meta)
-            if self.queries[query][feed] is None:
-                self.queries[query][feed] = False
+        meta, candidates, this, query = self._unpack_meta(response)
+        if candidates:
+            candidates[this] = False
 
     def process_spider_output(self, response: Response, result, spider):
-        meta, query, feed = self._unpack_meta(response)
+        meta, candidates, this, query = self._unpack_meta(response)
+        if not candidates:
+            return result
         for r in result:
-            if not isinstance(r, Mapping) or 'valid_feed' not in r:
-                yield r
-            self.queries[query][feed] = True
+            if isinstance(r, Mapping) and 'valid_feed' in r:
+                candidates[this] = True
+            yield r
 
     def process_spider_exception(self, response: Response, exception: FeedExhausted, spider):
         if not isinstance(exception, FeedExhausted):
             return
-        meta, query, feed = self._unpack_meta(response)
-        if not query:
+
+        meta, candidates, this, query = self._unpack_meta(response)
+        if not candidates:
             return
-        if self.queries.get(query, {}).get(feed) is False:
-            self.log.debug(f'Empty feed {feed}')
-        states = set(self.queries[query].values())
+
+        if candidates[this] is False:
+            self.log.debug(f'Empty feed {this}')
+        states = set(candidates.values())
         if None in states:
             return []
+
         if True not in states:
             self.log.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
-            if getattr(spider, '_fuzzy', None):
+            if getattr(spider, 'fuzzy', None):
                 self.log.info('Searching via Feedly ...')
+                meta['reason'] = 'search'
                 callback = meta['search_callback']
                 kwargs = meta.get('search_kwargs', {})
                 cb_kwargs = {**kwargs.pop('cb_kwargs', {}), 'callback': callback}
@@ -85,19 +137,8 @@ class FeedCompletionMiddleware:
                 )]
         return []
 
-    def process_start_requests(self, requests: List[Request], spider):
-        for r in requests:
-            meta = r.meta
-            if 'candidate_for' in meta:
-                self._record_query(meta)
-            yield r
-
     def _unpack_meta(self, request):
-        return request.meta, request.meta.get('candidate_for'), request.meta.get('candidate_id')
-
-    def _record_query(self, meta):
-        c = self.queries.setdefault(meta['candidate_for'], {})
-        c.setdefault(meta['candidate_id'], None)
+        return request.meta, request.meta.get('feed_candidates'), request.meta.get('feed_url'), request.meta.get('feed_query')
 
 
 class HTTPErrorMiddleware:

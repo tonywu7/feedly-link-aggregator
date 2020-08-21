@@ -28,16 +28,16 @@ from .utils import compose_mappings
 
 class Config(dict):
     def __getattr__(self, key):
-        return self.get(key.lower())
+        return self.get(key)
 
     def __setattr__(self, name, value):
-        return self.__setitem__(name.lower(), value)
+        return self.__setitem__(name, value)
 
     def __getitem__(self, key):
-        return self.get(str(key).lower())
+        return self.get(key)
 
     def __setitem__(self, key, value):
-        return super().__setitem__(str(key).lower(), value)
+        return super().__setitem__(str(key), value)
 
     def from_json(self, path):
         with open(path) as f:
@@ -51,7 +51,7 @@ class Config(dict):
 
     def from_object(self, obj):
         keys = dir(obj)
-        self.merge({k.lower(): getattr(obj, k) for k in keys if k.isupper()})
+        self.merge({k: getattr(obj, k) for k in keys if k.isupper()})
 
     def merge(self, other):
         d = compose_mappings(self, other)
@@ -59,7 +59,6 @@ class Config(dict):
         self.update(d)
 
     def get_namespace(self, prefix):
-        prefix = prefix.lower()
         length = len(prefix)
-        d = Config({k[length:]: v for k, v in self.items() if k[:length] == prefix})
+        d = Config({k[length:].lower(): v for k, v in self.items() if k[:length] == prefix})
         return d
