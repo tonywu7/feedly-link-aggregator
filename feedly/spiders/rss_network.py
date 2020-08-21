@@ -59,15 +59,16 @@ class SiteNetworkSpider(FeedlyRSSSpider):
     EDGE_TRANSFORMS = {
         'hrefs': lambda c: list({tuple(h) for h in c}),
     }
-    DEFAULT_CONFIG = {
-        **FeedlyRSSSpider.DEFAULT_CONFIG,
-        'depth': 0,
-        'overwrite': True,
-    }
+
+    class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
+        OVERWRITE = True
+
+        ALLOWED_DOMAINS = None
+        NETWORK_DEPTH = 1
 
     def __init__(self, name=None, **kwargs):
         super().__init__(name=name, **kwargs)
-        self._depth = int(self._config['depth'])
+        self._depth = self._config['network_depth'] = int(self._config['network_depth'])
 
         self._statspipeline_config = {
             'logstats': {
@@ -77,12 +78,12 @@ class SiteNetworkSpider(FeedlyRSSSpider):
             'autosave': 'rss/page_count',
         }
 
-        domains = self._config.get('domains')
+        domains = self._config['allowed_domains']
         if isinstance(domains, str):
             domains = set(domains.split(' '))
         elif isinstance(domains, List):
             domains = set(domains)
-        self._domains = domains
+        self._domains = self._config['allowed_domains'] = domains
 
         self.index: nx.Graph = nx.Graph()
         if self.output.exists():
@@ -93,8 +94,6 @@ class SiteNetworkSpider(FeedlyRSSSpider):
                 except (json.JSONDecodeError, KeyError) as e:
                     raise ValueError(f'Cannot load graph data from existing file {self.output}') from e
         self.index.for_json = graph_for_json.__get__(self.index)
-
-        _check_recommendations(self)
 
     def single_feed_only(self, feed, depth):
         if not feed or len(feed) > 1:
@@ -150,7 +149,7 @@ class GraphExpansionMiddleware:
                 self._discovered |= sites
             for url in sites:
                 spider.logger.info(f'Found possible RSS feed {url} (depth={depth + 1})')
-                yield from spider.try_feed_urls(url, search_callback=spider.single_feed_only, meta={'depth': depth})
+                yield from spider.try_feeds(url, search_callback=spider.single_feed_only, meta={'depth': depth})
 
         if not src.netloc:
             return
@@ -188,50 +187,3 @@ class GraphExpansionMiddleware:
             else:
                 href = (0, utils.path_only(dest), utils.path_only(src), item.published.timestamp(), dest_info['tag'].pop())
             edge_info['hrefs'].append(href)
-
-
-def _check_recommendations(spider: SiteNetworkSpider):
-    lines = []
-    if json.dumps(spider.DEFAULT_CONFIG['templates']) == json.dumps(spider._config.get('templates')):
-        if spider._fuzzy:
-            lines.extend([
-                '',
-                'Fuzzy search is enabled and no URL template is provided.',
-                '',
-                'This means that spider will initiate a search',
-                'via Feedly for almost all new nodes it discovers,',
-                'which could quickly lead to rate-limiting.',
-                "(Feedly's Search API is much more sensitive to high-volume requests.)",
-                '',
-                'Consider providing templates (via profiles) and disabling fuzzy search.',
-                'See files under profiles/ for examples.',
-            ])
-        else:
-            lines.extend([
-                '',
-                'No URL template is provided and fuzzy search is disabled.',
-                '',
-                'This means that spider will only check if the homepage of',
-                'a website exists on Feedly as a valid RSS feed,',
-                'which is almost never the case, and the number of nodes the spider',
-                'can crawl will be greatly reduced.',
-                '',
-                'Consider providing templates (via profiles).',
-                'See files under profiles/ for examples.',
-            ])
-    if not spider._domains:
-        lines.extend([
-            '',
-            'No allowed domain is specified via a profile or the `-a domains` option.',
-            '',
-            'Spider will attempt to crawl every domain it has encountered,',
-            'which may include CDN servers and unrelated sites (such as social media sites).',
-            '',
-            'Consider restricting which domains the spider can look for RSS feeds.',
-        ])
-    if lines:
-        for line in lines:
-            spider.logger.warn(line)
-        spider.logger.warn('')
-        spider.logger.warn(f'Crawler will start in {len(lines) // 3}s. Press CTRL-C to stop.')
-        utils.wait(len(lines) // 3)

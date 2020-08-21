@@ -28,7 +28,7 @@ from scrapy.http import Request, Response
 from scrapy.exceptions import IgnoreRequest
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 
-from . import feedly, utils
+from . import feedly
 from .exceptions import FeedExhausted
 
 
@@ -70,9 +70,9 @@ class FeedCompletionMiddleware:
         if None in states:
             return []
         if True not in states:
+            self.log.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
             if getattr(spider, '_fuzzy', None):
-                self.log.info(f'Candidates for `{query}` exhausted with no valid feed data found.')
-                self.log.info('Fuzzy searching via Feedly ...')
+                self.log.info('Searching via Feedly ...')
                 callback = meta['search_callback']
                 kwargs = meta.get('search_kwargs', {})
                 cb_kwargs = {**kwargs.pop('cb_kwargs', {}), 'callback': callback}
@@ -80,12 +80,9 @@ class FeedCompletionMiddleware:
                     feedly.build_api_url('search', query=query),
                     callback=spider.parse_search_result,
                     cb_kwargs=cb_kwargs,
+                    priority=2,
                     **kwargs,
                 )]
-            else:
-                self.log.debug(f'Cannot find any valid RSS feeds using `{query}` and the URL templates provided.')
-                self.log.debug('(Enable fuzzy search with option `-a fuzzy=True`)')
-                utils.wait(5)
         return []
 
     def process_start_requests(self, requests: List[Request], spider):
