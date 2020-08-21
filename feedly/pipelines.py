@@ -76,9 +76,7 @@ class StatsPipeline:
         return cls(crawler)
 
     def open_spider(self, spider):
-        self.milestones = getattr(spider, '_statspipeline_config', {'logstats': {}, 'autosave': None})
-        for k in self.milestones['logstats']:
-            self.stats.set_value(k, 0)
+        self.milestones = getattr(spider, 'statspipeline_config', {'logstats': {}, 'autosave': None})
 
         self.index = spider.index
         self.output = spider.output
@@ -98,7 +96,6 @@ class StatsPipeline:
             self.log.info('Statistics:')
             for k, v in stats.items():
                 self.log.info(f'  {k}: {v}')
-                self.stats.set_value(f'milestones/{k}', v)
         autosave = self.milestones['autosave']
         if report == autosave:
             self._flush()

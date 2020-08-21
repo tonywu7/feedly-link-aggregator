@@ -28,7 +28,6 @@ import simplejson as json
 from networkx.classes.function import set_edge_attributes, set_node_attributes
 from networkx.readwrite import node_link_data, node_link_graph
 from scrapy.http import Request, TextResponse
-from scrapy.utils.url import url_is_from_any_domain
 
 from .rss_spider import FeedlyRSSSpider
 from .. import utils
@@ -68,9 +67,9 @@ class SiteNetworkSpider(FeedlyRSSSpider):
 
     def __init__(self, name=None, **kwargs):
         super().__init__(name=name, **kwargs)
-        self._depth = self._config['network_depth'] = int(self._config['network_depth'])
+        self._depth = self.config['NETWORK_DEPTH'] = int(self.config['NETWORK_DEPTH'])
 
-        self._statspipeline_config = {
+        self.statspipeline_config = {
             'logstats': {
                 'rss/node_count': 1000,
                 'rss/page_count': 4096,
@@ -78,12 +77,12 @@ class SiteNetworkSpider(FeedlyRSSSpider):
             'autosave': 'rss/page_count',
         }
 
-        domains = self._config['allowed_domains']
+        domains = self.config['ALLOWED_DOMAINS']
         if isinstance(domains, str):
             domains = set(domains.split(' '))
         elif isinstance(domains, List):
             domains = set(domains)
-        self._domains = self._config['allowed_domains'] = domains
+        self._domains = self.config['ALLOWED_DOMAINS'] = domains
 
         self.index: nx.Graph = nx.Graph()
         if self.output.exists():
@@ -123,8 +122,6 @@ class GraphExpansionMiddleware:
 
     def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: SiteNetworkSpider):
         depth = response.meta.get('depth')
-        if depth is not None and depth >= spider._depth:
-            depth = None
         for item in result:
             if not isinstance(item, FeedlyEntry):
                 yield item
@@ -142,14 +139,19 @@ class GraphExpansionMiddleware:
         dest = {urlsplit(k): v for k, v in store.items()}
         dest = {k: v for k, v in dest.items() if k.netloc}
         self.stats.inc_value('rss/resource_count', len(dest))
-        if depth is not None:
-            sites = [f'{u.scheme}://{u.netloc}' for u in dest]
-            if spider._domains:
-                sites = {u for u in sites if url_is_from_any_domain(u, spider._domains)} - self._discovered
-                self._discovered |= sites
-            for url in sites:
-                spider.logger.info(f'Found possible RSS feed {url} (depth={depth + 1})')
-                yield from spider.try_feeds(url, search_callback=spider.single_feed_only, meta={'depth': depth})
+
+        sites = {f'{u.scheme}://{u.netloc}' for u in dest} - self._discovered
+        self._discovered |= sites
+        spider.logger.debug(f'depth={depth}; +{len(sites)}')
+
+        for url in sites:
+            yield from spider.try_feeds(
+                url, search_callback=spider.single_feed_only,
+                meta={
+                    'depth': depth,
+                    'reason': 'newly_discovered',
+                },
+            )
 
         if not src.netloc:
             return
@@ -163,6 +165,7 @@ class GraphExpansionMiddleware:
             if not g.has_node(d):
                 self.stats.inc_value('rss/node_count', 1)
                 g.add_node(d, feeds=[], names=[], keywords=[])
+
         feed = item.origin and item.origin['feed']
         name = item.origin and item.origin['title']
         src_node = g.nodes[src.netloc]

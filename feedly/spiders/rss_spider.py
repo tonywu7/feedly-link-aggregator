@@ -41,7 +41,7 @@ from .. import feedly
 from ..config import Config
 from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
-from ..utils import JSONDict, HyperlinkStore, falsy, wait
+from ..utils import JSONDict, HyperlinkStore, falsy, no_scheme, path_only, wait
 
 log = logging.getLogger('feedly.spiders')
 
@@ -57,7 +57,7 @@ def with_authorization(func):
     @wraps(func)
     def add_header(self: FeedlyRSSSpider, *args, **kwargs):
         g = func(self, *args, **kwargs)
-        if self._token:
+        if self.token:
             for req in g:
                 if isinstance(req, Request):
                     req.headers['Authorization'] = f'OAuth {self.token}'
@@ -95,8 +95,8 @@ class FeedlyRSSSpider(Spider):
         DOWNLOAD_ORDER = 'oldest'
         DOWNLOAD_PER_BATCH = 1000
 
-        FEEDLY_FUZZY_SEARCH = False
-        FEEDLY_ACCESS_TOKEN = None
+        FUZZY_SEARCH = False
+        ACCESS_TOKEN = None
 
         STREAM_ID_PREFIX = 'feed/'
 
@@ -109,17 +109,18 @@ class FeedlyRSSSpider(Spider):
     def __init__(self, name=None, profile=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
+        kwargs = {k.upper(): v for k, v in kwargs.items()}
         config = Config()
         config.from_object(self.SpiderConfig)
         if profile:
             config.from_pyfile(profile)
         config.merge(kwargs)
 
-        output = Path(config['output'])
-        if output.exists() and falsy(config['overwrite']):
+        output = Path(config['OUTPUT'])
+        if output.exists() and falsy(config['OVERWRITE']):
             self.logger.error(f'{output} already exists, not overwriting.')
             raise CloseSpider('file_exists')
-        self.output = config['output'] = output
+        self.output = config['OUTPUT'] = output
 
         index = {
             'items': {},
@@ -127,49 +128,59 @@ class FeedlyRSSSpider(Spider):
         }
         self.index: JSONDict = index
 
-        self._query = config['feed'] = unquote(config['feed'])
-        self._fuzzy = config['feedly_fuzzy_search']
-        self._token = config['feedly_access_token']
+        self.query = config['FEED'] = unquote(config['FEED'])
+        self.fuzzy = config['FUZZY_SEARCH']
+        self.token = config['ACCESS_TOKEN']
 
-        templates = {re.compile(k): v for k, v in config['feed_templates'].items()}
-        config['feed_templates'] = templates
-        self._url_templates: Dict[Pattern[str], JSONDict] = templates
+        templates = {re.compile(k): v for k, v in config['FEED_TEMPLATES'].items()}
+        config['FEED_TEMPLATES'] = templates
+        self.url_templates: Dict[Pattern[str], JSONDict] = templates
 
-        self._statspipeline_config = {
+        self.statspipeline_config = {
             'logstats': {
-                'rss/page_count': 1000,
-                'rss/resource_count': 5000,
+                'rss/page_count': 100,
+                'rss/resource_count': 500,
             },
             'autosave': 'rss/page_count',
         }
 
         self.api_base_params = {
-            'count': int(config['download_per_batch']),
-            'ranked': config['download_order'],
+            'count': int(config['DOWNLOAD_PER_BATCH']),
+            'ranked': config['DOWNLOAD_ORDER'],
             'similar': 'true',
             'unreadOnly': 'false',
         }
-        self._config = config
+        self.config = config
 
     def open_spider(self, spider):
-        self.logger.info(f'Spider parameters:\n{pformat(self._config)}')
+        self.logger.info(f'Spider parameters:\n{pformat(self.config)}')
 
     def start_requests(self):
-        return self.try_feeds(self._query, prefix=self._config['stream_id_prefix'], search_callback=self.single_feed_only_with_prompt)
+        return self.try_feeds(
+            self.query,
+            prefix=self.config['STREAM_ID_PREFIX'],
+            search_callback=self.single_feed_only_with_prompt,
+            meta={'reason': 'user_specified'},
+        )
 
     def get_streams_url(self, feed_id, **params):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     @with_authorization
     def try_feeds(self, query, *, prefix='feed/', search_callback, search_kwargs=None, **kwargs):
-        effective_templates = {k: v for k, v in self._url_templates.items() if k.match(query)}
+        effective_templates = {k: v for k, v in self.url_templates.items() if k.match(query)}
         query_parsed = urlsplit(query)
-        specifiers = {**query_parsed._asdict(), 'original': query_parsed.geturl()}
-        urls = [t % specifiers for _, t in sorted(
+        specifiers = {
+            **query_parsed._asdict(),
+            'network_path': no_scheme(query_parsed),
+            'path_query': path_only(query_parsed),
+            'original': query_parsed.geturl(),
+        }
+        urls = {t % specifiers: None for _, t in sorted(
             (priority, tmpl)
             for pattern, tmpls in effective_templates.items()
             for tmpl, priority in tmpls.items()
-        )]
+        )}
 
         for u in urls:
             yield from self.next_page(
@@ -177,11 +188,13 @@ class FeedlyRSSSpider(Spider):
                 meta={
                     **kwargs.pop('meta', {}),
                     'inc_depth': True,
-                    'candidate_id': u,
-                    'candidate_for': query,
+                    'feed_url': u,
+                    'feed_query': query,
+                    'feed_candidates': urls,
                     'search_callback': search_callback,
                     'search_kwargs': search_kwargs or {},
-                }, initial=True,
+                },
+                initial=True,
                 **kwargs,
             )
 
@@ -194,12 +207,12 @@ class FeedlyRSSSpider(Spider):
 
     def single_feed_only_with_prompt(self, feed, **kwargs):
         if not feed:
-            self.logger.critical(f'Cannot find a feed from Feedly using the query `{self._query}`')
+            self.logger.critical(f'Cannot find a feed from Feedly using the query `{self.query}`')
             wait(5)
             return
         if len(feed) > 1:
             msg = [
-                f'Found more than one possible feeds using the query `{self._query}`:',
+                f'Found more than one possible feeds using the query `{self.query}`:',
                 *['  ' + f[1] for f in feed],
                 'Please run scrapy again using one of the values above. Crawler will now close.',
             ]
@@ -219,26 +232,30 @@ class FeedlyRSSSpider(Spider):
             meta = {}
         meta.update(kwargs.pop('meta', {}))
         if not initial:
+            meta['no_filter'] = True
             meta.pop('inc_depth', None)
 
         params = {}
         cont = data.get('continuation')
         if cont:
             params['continuation'] = cont
+            meta['reason'] = 'continuation'
         elif not initial:
             raise FeedExhausted(response)
 
         url = self.get_streams_url(feed, **params)
         if response:
-            yield response.request.replace(url=url, meta=meta)
+            yield response.request.replace(url=url, meta=meta, **kwargs)
             return
-        yield Request(url, meta=meta, priority=1 if initial else 0, **kwargs)
+        yield Request(url, meta=meta, **kwargs)
 
     def parse_feed(self, response: TextResponse):
         data = _guard_json(response.text)
         items = data.get('items')
         if items:
             yield {'valid_feed': response}
+            if response.meta.get('reason') != 'continuation':
+                self.logger.info(f'Got new RSS feed at {response.meta["feed_url"]}')
 
         for item in items:
             entry = FeedlyEntry.from_upstream(item)

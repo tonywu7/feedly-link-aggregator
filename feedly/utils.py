@@ -95,6 +95,10 @@ def ensure_collection(supplier):
     return converter
 
 
+def no_scheme(url: SplitResult) -> str:
+    return url.geturl()[len(f'{url.scheme}:'):]
+
+
 def path_only(url: SplitResult) -> str:
     return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
 
