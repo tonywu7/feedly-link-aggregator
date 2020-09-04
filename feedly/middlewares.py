@@ -21,29 +21,34 @@
 # SOFTWARE.
 
 import logging
-from collections.abc import Mapping
+import time
 from typing import Callable, List
 
 from scrapy import Spider
-from scrapy.http import Request, Response
 from scrapy.exceptions import IgnoreRequest
+from scrapy.http import Request, Response
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 
-from . import feedly
-from .exceptions import FeedExhausted
 
-
-class ConditionalDepthMiddleware(DepthMiddleware):
+class ConditionalDepthSpiderMiddleware(DepthMiddleware):
     def process_spider_output(self, response, result, spider):
-        if response.meta.get('inc_depth'):
-            return super().process_spider_output(response, result, spider)
-        return result
+        if not self.maxdepth:
+            self.maxdepth = spider.config.getint('DEPTH_LIMIT')
+        should_increase = []
+        other_items = []
+        for r in result:
+            if isinstance(r, Request) and r.meta.get('inc_depth'):
+                should_increase.append(r)
+            else:
+                other_items.append(r)
+        other_items.extend(super().process_spider_output(response, should_increase, spider))
+        return other_items
 
 
 def filter_depth(request: Request, spider: Spider):
     depth = request.meta.get('depth')
-    max_depth = spider.config['NETWORK_DEPTH']
+    max_depth = spider.config['DEPTH_LIMIT']
     if depth is not None and max_depth is not None:
         if depth > max_depth:
             return False
@@ -58,10 +63,9 @@ def filter_domains(request: Request, spider: Spider):
     return url_is_from_any_domain(feed_url, domains)
 
 
-class RequestFilterMiddleware:
+class RequestFilterDownloaderMiddleware:
     DEFAULT_FILTERS = {
         filter_domains: 300,
-        filter_depth: 700,
     }
 
     def __init__(self):
@@ -76,7 +80,8 @@ class RequestFilterMiddleware:
     def process_request(self, request: Request, spider):
         if not self._initialized:
             self.init(spider)
-        # print({k: k(request, spider) for k in self.tests})
+        if request.meta.get('no_filter'):
+            return
         if any((not t(request, spider)) for t in self.tests):
             ignore = request.meta.get('if_ignore')
             if ignore:
@@ -85,63 +90,20 @@ class RequestFilterMiddleware:
         proceed = request.meta.get('if_proceed')
         if proceed:
             proceed()
-        return None
 
 
-class FeedCompletionMiddleware:
-    def __init__(self):
-        self.log = logging.getLogger('feedly.search')
-
-    def process_spider_input(self, response: Response, spider):
-        meta, candidates, this, query = self._unpack_meta(response)
-        if candidates:
-            candidates[this] = False
-
-    def process_spider_output(self, response: Response, result, spider):
-        meta, candidates, this, query = self._unpack_meta(response)
-        if not candidates:
-            return result
-        for r in result:
-            if isinstance(r, Mapping) and 'valid_feed' in r:
-                candidates[this] = True
-            yield r
-
-    def process_spider_exception(self, response: Response, exception: FeedExhausted, spider):
-        if not isinstance(exception, FeedExhausted):
+class AuthorizationDownloaderMiddleware:
+    def process_request(self, request: Request, spider):
+        if request.headers.get('Authorization'):
             return
-
-        meta, candidates, this, query = self._unpack_meta(response)
-        if not candidates:
-            return
-
-        if candidates[this] is False:
-            self.log.debug(f'Empty feed {this}')
-        states = set(candidates.values())
-        if None in states:
-            return []
-
-        if True not in states:
-            self.log.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
-            if getattr(spider, 'fuzzy', None):
-                self.log.info('Searching via Feedly ...')
-                meta['reason'] = 'search'
-                callback = meta['search_callback']
-                kwargs = meta.get('search_kwargs', {})
-                cb_kwargs = {**kwargs.pop('cb_kwargs', {}), 'callback': callback}
-                return [Request(
-                    feedly.build_api_url('search', query=query),
-                    callback=spider.parse_search_result,
-                    cb_kwargs=cb_kwargs,
-                    priority=2,
-                    **kwargs,
-                )]
-        return []
-
-    def _unpack_meta(self, request):
-        return request.meta, request.meta.get('feed_candidates'), request.meta.get('feed_url'), request.meta.get('feed_query')
+        auth = request.meta.get('auth')
+        if auth:
+            request = request.copy()
+            request.headers['Authorization'] = f'OAuth {auth}'
+            return request
 
 
-class HTTPErrorMiddleware:
+class HTTPErrorDownloaderMiddleware:
     def __init__(self, crawler):
         self.crawler = crawler
         self.log = logging.getLogger('feedly.ratelimiting')
@@ -158,9 +120,22 @@ class HTTPErrorMiddleware:
             self.log.warn(f'URL: {request.url}')
             raise IgnoreRequest()
         if response.status == 429:
-            self.log.critical('Server returned HTTP 429 Too Many Requests.')
-            self.log.critical('Either your IP address or your developer account is being rate-limited.')
-            self.log.critical('Crawler will now stop.')
-            self.crawler.engine.close_spider(spider, 'rate_limited')
-            raise IgnoreRequest()
+            retry_after = response.headers.get('Retry-After')
+            if retry_after:
+                retry_after = int(retry_after)
+                self.log.warn('Server returned HTTP 429 Too Many Requests.')
+                self.log.warn('Either your IP address or your developer account is being rate-limited.')
+                self.log.warn(f'Retry-After = {retry_after}s')
+                self.log.warn(f'Scrapy will now pause for {retry_after}s')
+                spider.crawler.engine.pause()
+                time.sleep(retry_after * 1.2)
+                spider.crawler.engine.unpause()
+                self.log.info('Resuming crawl.')
+                return request.copy()
+            else:
+                self.log.critical('Server returned HTTP 429 Too Many Requests.')
+                self.log.critical('Either your IP address or your developer account is being rate-limited.')
+                self.log.critical('Crawler will now stop.')
+                self.crawler.engine.close_spider(spider, 'rate_limited')
+                raise IgnoreRequest()
         return response

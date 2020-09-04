@@ -25,6 +25,7 @@ import logging
 from logging.config import dictConfig
 
 import simplejson as json
+from scrapy.exporters import JsonLinesItemExporter
 
 from .logger import make_logging_config
 from .utils import json_converters
@@ -67,48 +68,60 @@ class StatsPipeline:
         self.stats = crawler.stats
         self.log = logging.getLogger('feedly.stats')
 
-    @staticmethod
-    def process(index):
-        return index
-
     @classmethod
     def from_crawler(cls, crawler):
         return cls(crawler)
 
     def open_spider(self, spider):
-        self.milestones = getattr(spider, 'statspipeline_config', {'logstats': {}, 'autosave': None})
-
-        self.index = spider.index
-        self.output = spider.output
-        if callable(getattr(spider, '_index_processor', None)):
-            self.process = spider._index_processor
+        self.milestones = getattr(spider, 'statspipeline_config', {})
 
     def process_item(self, item, spider):
         report = False
-        stats = {}
-        for k, v in self.milestones['logstats'].items():
-            s = self.stats.get_value(k, 0)
-            stats[k] = s
-            if s - self.stats.get_value(f'milestones/{k}', 0) >= v:
-                self.stats.set_value(f'milestones/{k}', s)
+        stats = self.stats
+        milestones = self.milestones
+        items = milestones.items
+        values = {k: stats.get_value(k, 0) for k, v in items()}
+        diff = {k: v // milestones[k] - stats.get_value(f'milestones/{k}', 0) for k, v in values.items()}
+        for k, v in diff.items():
+            if v:
                 report = k
+                stats.inc_value(f'milestones/{k}')
+                break
         if report:
             self.log.info('Statistics:')
-            for k, v in stats.items():
+            for k, v in values.items():
                 self.log.info(f'  {k}: {v}')
-        autosave = self.milestones['autosave']
-        if report == autosave:
-            self._flush()
         return item
 
-    def close_spider(self, spider):
-        self._flush()
 
-    def _flush(self):
-        log.info('Saving progress ...')
-        with open(self.output.resolve(), 'w') as f:
-            json.dump(
-                (self.process(self.index)), f,
-                ensure_ascii=False, default=json_converters, for_json=True,
-                iterable_as_array=True,
-            )
+class FeedlyEntryExportPipeline:
+    def open_spider(self, spider):
+        self.output = spider.config['OUTPUT']
+        self.file = open(self.output.with_suffix('.json.tmp'), 'a+')
+        self.exporter = SimpleJSONLinesExporter(self.file)
+        self.exporter.start_exporting()
+
+    def close_spider(self, spider):
+        self.exporter.finish_exporting()
+        self.file.flush()
+        self.file.seek(0)
+        spider.logger.info(f'Saving feed digest to {self.output} ...')
+        with open(self.output, 'w') as f:
+            f.write(spider.digest_feed_export(self.file))
+        self.file.close()
+
+    def process_item(self, item, spider):
+        self.exporter.export_item(item)
+        return item
+
+
+class SimpleJSONLinesExporter(JsonLinesItemExporter):
+    def __init__(self, file, **kwargs):
+        super().__init__(file, **kwargs)
+        self.encoder = json.JSONEncoder(
+            ensure_ascii=True, default=json_converters,
+            for_json=True, iterable_as_array=True)
+
+    def export_item(self, item):
+        serialized = self.encoder.encode(item) + '\n'
+        self.file.write(serialized)

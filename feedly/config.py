@@ -21,24 +21,14 @@
 # SOFTWARE.
 
 import json
-from importlib.util import spec_from_file_location, module_from_spec
+from importlib.util import module_from_spec, spec_from_file_location
+
+from scrapy.settings import BaseSettings
 
 from .utils import compose_mappings
 
 
-class Config(dict):
-    def __getattr__(self, key):
-        return self.get(key)
-
-    def __setattr__(self, name, value):
-        return self.__setitem__(name, value)
-
-    def __getitem__(self, key):
-        return self.get(key)
-
-    def __setitem__(self, key, value):
-        return super().__setitem__(str(key), value)
-
+class Config(BaseSettings):
     def from_json(self, path):
         with open(path) as f:
             self.merge(json.load(f))

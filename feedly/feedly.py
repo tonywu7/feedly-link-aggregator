@@ -52,9 +52,13 @@ def build_api_url(endpoint, **params):
     return SplitResult(**url).geturl()
 
 
+def get_feed_uri(s):
+    return s.split('/', 1)[1]
+
+
 @attr.s(kw_only=True, frozen=True)
 class FeedlyEntry:
-    _id: str = attr.ib(default=None)
+    _id: str = attr.ib(default=None, repr=False, eq=False, order=False)
     id_hash: str = attr.ib(default=attr.Factory(lambda s: s._id and utils.sha1sum(s._id), takes_self=True), repr=False)
 
     url: str = attr.ib()
@@ -98,7 +102,7 @@ class FeedlyEntry:
         origin = item.get('origin')
         if origin:
             return {
-                'feed': origin.get('streamId', '/').split('/', 1)[1],
+                'feed': get_feed_uri(origin.get('streamId', '/')),
                 'title': origin.get('title'),
                 'homepage': origin.get('htmlUrl'),
             }

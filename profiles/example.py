@@ -14,16 +14,16 @@ FEED = 'https://xkcd.com/atom.xml'
 
 # Which part of the feed to download first: either `oldest` or `newest`
 DOWNLOAD_ORDER = 'oldest'
-# How much Feedly entries to download per API request
+# How much Feedly entries to download per API request. The minimum is 20 and the maximum is 1000.
 DOWNLOAD_PER_BATCH = 1000
 
 # Whether or not to enable the search function
-# If enabled, when the feed URL you provided above does not yield any results from Feedly,
+# If enabled, when the feed URL you provided above does not yield any result from Feedly,
 # Scrapy will use Feedly's Search API to try to find the correct URL.
 #
 # It is recommended that you disable search when using the network spider, because it could generate
 # a large number of search requests, and Feedly's Search API is a lot more sensitive to
-# high volume requests than its Streams API. You may quickly run into rate-limit issues.
+# high volume requests than its Streams API. You may quickly run into rate-limiting issues.
 FUZZY_SEARCH = False
 
 # If you have Feedly's developer access token, you can provide it here.
@@ -36,11 +36,12 @@ ACCESS_TOKEN = None
 # If set to None, spider will not filter nodes based on domains.
 ALLOWED_DOMAINS = None
 # Network spider related option.
+# This is the same settings as the one used by the built-in DepthMiddleware.
 # Value should be an integer.
 # Nodes that are more `depth` degree removed from the starting feed will not be expanded upon.
 # If set to 0, only the starting feed will be crawled.
 # If set to None, spider will keep crawling further and further until manually stopped.
-NETWORK_DEPTH = 1
+DEPTH_LIMIT = 1
 
 # Templates to generate different versions of RSS URLs based on the value of the FEED setting.
 # Because Feedly sometimes store an RSS feed's source URL with slight variations (e.g. using HTTP instead of HTTPS),
