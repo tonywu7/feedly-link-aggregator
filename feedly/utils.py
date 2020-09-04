@@ -23,12 +23,13 @@
 from __future__ import annotations
 
 import time
-from collections.abc import MutableSequence, MutableSet, MutableMapping
+from collections.abc import MutableMapping, MutableSequence, MutableSet
 from datetime import datetime, timezone
 from hashlib import sha1
 from typing import Any, Dict, List, Tuple, Union
 from urllib.parse import SplitResult, urlsplit
 
+import simplejson as json
 from scrapy.http import TextResponse
 
 from .datastructures import KeywordCollection, KeywordStore
@@ -61,6 +62,10 @@ def json_converters(value: Any) -> JSONType:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(type(value))
+
+
+def load_jsonlines(file) -> List[JSONDict]:
+    return [json.loads(line) for line in file.read().split('\n') if line]
 
 
 def datetime_converters(dt: Union[str, int, float, datetime], tz=timezone.utc) -> datetime:
