@@ -66,7 +66,7 @@ class CProfile:
 class FeedlyEntryExportPipeline:
     def open_spider(self, spider):
         self.output = spider.config['OUTPUT']
-        self.file = open(self.output.with_suffix('.stream.jsonl'), 'a+')
+        self.file = open(self.output.with_suffix('.stream.jsonl'), 'a+', 65536)
         self.exporter = SimpleJSONLinesExporter(self.file)
         self.exporter.start_exporting()
 

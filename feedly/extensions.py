@@ -35,6 +35,7 @@ class LogStatsExtended(LogStats):
     def spider_opened(self, spider):
         self.items = getattr(spider, 'logstats_items', [])
         self.items.extend(['response_received_count'])
+        self.items.sort()
         super().spider_opened(spider)
 
     def log(self, spider):
@@ -42,10 +43,13 @@ class LogStatsExtended(LogStats):
 
         self.elapsed += 1
         if self.elapsed:
-            rates = {k: v / self.elapsed * self.multiplier for k, v in values.items()}
+            rates = {k: v / self.elapsed * self.multiplier for k, v in values.items() if isinstance(v, (int, float))}
         else:
             rates = {k: 0 for k in values}
 
         self.logger.info('Statistics:')
         for k, v in values.items():
-            self.logger.info(f'  {k}: {v} ({rates[k]:.1f}/min)')
+            if k in rates:
+                self.logger.info(f'  {k}: {v} ({rates[k]:.1f}/min)')
+            else:
+                self.logger.info(f'  {k}: {v}')

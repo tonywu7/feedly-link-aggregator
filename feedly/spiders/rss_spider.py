@@ -204,7 +204,7 @@ class FeedlyRSSSpider(Spider):
         self.logger.debug(f'initial={initial} depth={meta.get("depth")} reason={meta["reason"]} {feed}')
         url = self.get_streams_url(feed, **params)
         if response:
-            request = fetch(url, meta=meta, base=response.request, **kwargs)
+            request = fetch(url, base=response.request, meta=meta, **kwargs)
         else:
             request = fetch(url, meta=meta, **kwargs)
         return request.then(self.parse_feed).catch(self.close_feed)

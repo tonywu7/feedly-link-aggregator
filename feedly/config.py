@@ -21,7 +21,9 @@
 # SOFTWARE.
 
 import json
+import re
 from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 from scrapy.settings import BaseSettings
 
@@ -52,3 +54,9 @@ class Config(BaseSettings):
         length = len(prefix)
         d = Config({k[length:].lower(): v for k, v in self.items() if k[:length] == prefix})
         return d
+
+
+transformers = {
+    'OUTPUT': lambda text: Path(text),
+    'FEED_TEMPLATES': lambda text: {re.compile(k): v for k, v in json.loads(text)},
+}
