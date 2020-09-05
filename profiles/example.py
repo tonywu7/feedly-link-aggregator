@@ -88,6 +88,7 @@ def https_only(request: Request, spider: Spider):
 # A list of functions to use for filtering requests.
 # Each function takes exactly 2 arguments: the Request object and the Spider instance,
 # and should return True if the Request should continue, and False if the Request should be dropped.
+# If a `Request` object is returned, it will be rescheduled.
 # The Request.meta attribute will contain useful details about the request.
 # Some common metadata are:
 #   reason          - The reason this Request was fired, currently supported values are
@@ -106,3 +107,24 @@ REQUEST_FILTERS = {
 }
 
 STREAM_ID_PREFIX = 'feed/'
+
+
+def keyword_prioritizer(request, spider):
+    item = request.meta.get('source_item')
+    if not item:
+        return True
+    weight = 0
+    kws = {k.lower() for k in item.keywords}
+    for w, keys in weighted_keywords.items():
+        for k in keys:
+            if k in kws or k in item.url:
+                weight += w
+    if not weight:
+        return True
+    return request.replace(priority=request.priority + weight)
+
+
+weighted_keywords = {
+    -1: [],
+    1: [],
+}

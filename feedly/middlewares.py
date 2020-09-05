@@ -82,11 +82,16 @@ class RequestFilterDownloaderMiddleware:
             self.init(spider)
         if request.meta.get('no_filter'):
             return
-        if any((not t(request, spider)) for t in self.tests):
-            ignore = request.meta.get('if_ignore')
-            if ignore:
-                ignore()
-            raise IgnoreRequest()
+        for t in self.tests:
+            result = t(request, spider)
+            if not result:
+                ignore = request.meta.get('if_ignore')
+                if ignore:
+                    ignore()
+                raise IgnoreRequest()
+            if isinstance(result, Request):
+                result.meta['no_filter'] = True
+                return result
         proceed = request.meta.get('if_proceed')
         if proceed:
             proceed()
