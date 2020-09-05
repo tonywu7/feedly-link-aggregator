@@ -62,9 +62,11 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
-# EXTENSIONS = {
-#    'scrapy.extensions.telnet.TelnetConsole': None,
-# }
+EXTENSIONS = {
+    'scrapy.extensions.telnet.TelnetConsole': None,
+    'scrapy.extensions.logstats.LogStats': None,
+    'feedly.extensions.LogStatsExtended': 500,
+}
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
@@ -74,6 +76,8 @@ ITEM_PIPELINES = {
     # 'feedly.pipelines.StatsPipeline': 950,
     # 'feedly.pipelines.CProfile': 1000,
 }
+
+LOGSTATS_INTERVAL = 30.0
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html

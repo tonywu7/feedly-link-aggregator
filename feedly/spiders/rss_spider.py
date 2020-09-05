@@ -85,6 +85,7 @@ class FeedlyRSSSpider(Spider):
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super().from_crawler(crawler, *args, **kwargs)
+        spider.stats = crawler.stats
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
 
@@ -124,6 +125,8 @@ class FeedlyRSSSpider(Spider):
         }
         self.config = config
 
+        self.logstats_items = ['rss/page_count']
+
     def open_spider(self, spider):
         self.logger.info(f'Spider parameters:\n{pformat(self.config.copy_to_dict())}')
 
@@ -144,7 +147,7 @@ class FeedlyRSSSpider(Spider):
             query, prefix=self.config['STREAM_ID_PREFIX'],
             **kwargs,
         )
-        return Promise.all_settled(*starting_pages)
+        return Promise.all(*starting_pages)
 
     def start_search(self, query, **kwargs):
         return self.make_search(query, prefix=self.config['STREAM_ID_PREFIX'])
@@ -220,6 +223,7 @@ class FeedlyRSSSpider(Spider):
         for item in items:
             entry = FeedlyEntry.from_upstream(item)
             if entry:
+                self.stats.inc_value('rss/page_count')
                 yield entry
 
         return self.next_page(data, response=response)
@@ -227,13 +231,13 @@ class FeedlyRSSSpider(Spider):
     def close_feed(self, exc: FeedExhausted):
         if isinstance(exc, Failure):
             if isinstance(exc.value, IgnoreRequest):
-                return True
+                return {}
         if isinstance(exc, FeedExhausted):
             response = exc.response
             if response and response.meta.get('valid_feed'):
-                return True
+                return {}
             self.logger.debug(f'Empty feed {response.meta.get("feed_url")}')
-            return response
+            return {'empty_feed': response}
         raise exc
 
     def log_exception(self, exc: Failure):
@@ -242,10 +246,10 @@ class FeedlyRSSSpider(Spider):
         self.logger.error(exc, exc_info=True)
 
     def make_search(self, query, *, prefix='feed/', **kwargs):
-        def search(fetched: List[Promise]):
-            if any(p.is_fulfilled and p.value is True for p in fetched):
+        def search(responses: List[TextResponse]):
+            empty_feeds = [p['empty_feed'] for p in responses if 'empty_feed' in p]
+            if len(empty_feeds) != len(responses):
                 return
-            empty_feeds = [p.value for p in fetched if isinstance(p.value, TextResponse)]
             self.logger.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
 
             if self.config.getbool('FUZZY_SEARCH'):
@@ -297,11 +301,7 @@ class FeedlyRSSSpider(Spider):
     def digest_feed_export(self, digest_file) -> JSONDict:
         items = utils.load_jsonlines(digest_file)
         items = {item['id_hash']: item for item in items}
-        digest = {
-            'type': self.config['STREAM_ID_PREFIX'],
-            'feed_query': self.config['FEED'],
-            'items': items,
-        }
+        digest = {'items': items}
 
         resources = HyperlinkStore()
         for item in items.values():
