@@ -24,6 +24,8 @@ from functools import reduce
 
 import click
 import simplejson as json
+from scrapy.crawler import CrawlerProcess
+from scrapy.utils.project import get_project_settings
 
 from .utils import HyperlinkStore
 
@@ -116,6 +118,17 @@ def collect_keywords(crawl_data):
     store: HyperlinkStore = load_json(crawl_data)
     _, items = store.items()
     print('\n'.join(sorted(reduce(lambda x, y: x | y, [item.get('feedly_keyword', set()) for item in items]))))
+
+
+@cli.command()
+@click.option('-s', 'spider')
+@click.option('-p', 'profile')
+def debug_spider(spider, profile):
+    settings = get_project_settings()
+    settings['AUTOTHROTTLE_ENABLED'] = False
+    process = CrawlerProcess(settings)
+    process.crawl(spider, profile=profile)
+    process.start(stop_after_crawl=True)
 
 
 if __name__ == '__main__':

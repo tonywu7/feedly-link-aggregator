@@ -65,19 +65,17 @@ class CProfile:
 
 class FeedlyEntryExportPipeline:
     def open_spider(self, spider):
-        self.output = spider.config['OUTPUT']
-        self.file = open(self.output.with_suffix('.stream.jsonl'), 'a+', 65536)
-        self.exporter = SimpleJSONLinesExporter(self.file)
+        self.output_dir = spider.config['OUTPUT']
+        self.stream = open(self.output_dir.joinpath('stream.jsonl'), 'a+', 65536)
+        self.exporter = SimpleJSONLinesExporter(self.stream)
         self.exporter.start_exporting()
 
     def close_spider(self, spider):
         self.exporter.finish_exporting()
-        self.file.flush()
-        self.file.seek(0)
-        spider.logger.info(f'Saving feed digest to {self.output} ...')
-        with open(self.output, 'w') as f:
-            f.write(spider.digest_feed_export(self.file))
-        self.file.close()
+        self.stream.flush()
+        self.stream.seek(0)
+        spider.digest_feed_export(self.stream)
+        self.stream.close()
 
     def process_item(self, item, spider):
         self.exporter.export_item(item)

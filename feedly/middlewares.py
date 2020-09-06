@@ -32,6 +32,9 @@ from scrapy.utils.url import url_is_from_any_domain
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
+    def __init__(self, maxdepth, stats, verbose_stats=False, prio=1):
+        super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=0)
+
     def process_spider_output(self, response, result, spider):
         if not self.maxdepth:
             self.maxdepth = spider.config.getint('DEPTH_LIMIT')

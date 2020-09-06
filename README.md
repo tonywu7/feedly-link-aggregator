@@ -22,14 +22,14 @@ Install dependencies:
 Then start crawling:
 
 ```bash
-> scrapy crawl feed_content -a feed='<url>' -a output='<json>'
+> scrapy crawl feed_content -a feed='<url>' -a output_dir='<json>'
 ```
 
 where `<url>` is the URL to your RSS feed, and `<json>` is the path to the JSON file where crawled data will be saved.
 For example, 
 
 ```bash
-> scrapy crawl feed_content -a feed="https://xkcd.com/atom.xml" -a output=instance/xkcd.json
+> scrapy crawl feed_content -a feed="https://xkcd.com/atom.xml" -a output_dir=instance/xkcd.json
 ```
 
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
