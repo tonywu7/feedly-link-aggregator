@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +56,7 @@ def _guard_json(text: str) -> JSONDict:
 
 
 class FeedlyRSSSpider(Spider):
-    name = 'feed_content'
+    name = 'single_feed'
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
@@ -66,7 +67,7 @@ class FeedlyRSSSpider(Spider):
     }
 
     class SpiderConfig:
-        OUTPUT = f'./{datetime.now().strftime("%Y%m%d%H%M%S")}.crawl.json'
+        OUTPUT = f'./crawl.{datetime.now().strftime("%Y%m%d%H%M%S")}'
         OVERWRITE = False
 
         FEED = 'https://xkcd.com/atom.xml'
@@ -99,12 +100,13 @@ class FeedlyRSSSpider(Spider):
             config.from_pyfile(profile)
         config.merge(kwargs)
 
-        output = Path(config['OUTPUT'])
-        if output.exists() and not config.getbool('OVERWRITE'):
-            self.logger.error(f'{output} already exists, not overwriting.')
+        output_dir = Path(config['OUTPUT'])
+        if output_dir.exists() and not config.getbool('OVERWRITE'):
+            self.logger.error(f'{output_dir} already exists, not overwriting.')
             raise CloseSpider('file_exists')
-        config['OUTPUT'] = output
-        config.set('OUTPUT', output)
+        config['OUTPUT'] = output_dir
+        config.set('OUTPUT', output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
         config.set('FEED', unquote(config.get('FEED')))
 
@@ -133,9 +135,9 @@ class FeedlyRSSSpider(Spider):
     def start_requests(self):
         query = self.config['FEED']
         return (
-            self.start_feed(query, meta={'reason': 'user_specified'})
+            self.start_feed(query, meta={'reason': 'user_specified', 'depth': 1})
             .then(self.start_search(query))
-            .then(self.parse_single_feed)
+            .then(self.crawl_search_result_verbose)
             .catch(self.log_exception)
         )
 
@@ -143,17 +145,9 @@ class FeedlyRSSSpider(Spider):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
     def start_feed(self, query, **kwargs):
-        starting_pages = self.make_fetch(
-            query, prefix=self.config['STREAM_ID_PREFIX'],
-            **kwargs,
-        )
-        return Promise.all(*starting_pages)
-
-    def start_search(self, query, **kwargs):
-        return self.make_search(query, prefix=self.config['STREAM_ID_PREFIX'])
-
-    def make_fetch(self, query, *, prefix='feed/', **kwargs):
+        prefix = self.config['STREAM_ID_PREFIX']
         url_templates = self.config['FEED_TEMPLATES']
+
         effective_templates = {k: v for k, v in url_templates.items() if k.match(query)}
         query_parsed = urlsplit(query)
         specifiers = {
@@ -175,10 +169,32 @@ class FeedlyRSSSpider(Spider):
         if token:
             meta['auth'] = token
 
-        return [self.next_page({'id': f'{prefix}{u}'},
-                               meta={**meta, 'query': query},
-                               initial=True, **kwargs)
-                for u in urls]
+        starting_pages = [self.next_page({'id': f'{prefix}{u}'},
+                                         meta={**meta, 'query': query},
+                                         initial=True, **kwargs)
+                          for u in urls]
+        return Promise.all(*starting_pages)
+
+    def start_search(self, query, **kwargs):
+        def search(responses: List[TextResponse]):
+            empty_feeds = [p['empty_feed'] for p in responses if 'empty_feed' in p]
+            if len(empty_feeds) != len(responses):
+                return
+            self.logger.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
+
+            if self.config.getbool('FUZZY_SEARCH'):
+                self.logger.info(f'Searching Feedly for {query}')
+                meta = {**empty_feeds[0].meta}
+                meta.update(kwargs.pop('meta', {}))
+                meta['reason'] = 'search'
+
+                return fetch(
+                    feedly.build_api_url('search', query=query),
+                    priority=-1,
+                    meta=meta,
+                    **kwargs,
+                ).then(self.parse_search_result)
+        return search
 
     def next_page(self, data, response: TextResponse = None, initial=False, **kwargs):
         feed = data['id']
@@ -245,28 +261,6 @@ class FeedlyRSSSpider(Spider):
             exc = exc.value
         self.logger.error(exc, exc_info=True)
 
-    def make_search(self, query, *, prefix='feed/', **kwargs):
-        def search(responses: List[TextResponse]):
-            empty_feeds = [p['empty_feed'] for p in responses if 'empty_feed' in p]
-            if len(empty_feeds) != len(responses):
-                return
-            self.logger.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
-
-            if self.config.getbool('FUZZY_SEARCH'):
-                self.logger.info(f'Searching Feedly for {query}')
-                meta = {**empty_feeds[0].meta}
-                meta.update(kwargs.pop('meta', {}))
-                meta['reason'] = 'search'
-
-                return fetch(
-                    feedly.build_api_url('search', query=query),
-                    priority=-1,
-                    meta=meta,
-                    **kwargs,
-                ).then(self.parse_search_result)
-
-        return search
-
     def parse_search_result(self, response: TextResponse):
         if not response:
             return
@@ -276,7 +270,7 @@ class FeedlyRSSSpider(Spider):
             return response, []
         return response, [feed['feedId'] for feed in res['results']]
 
-    def parse_single_feed(self, _):
+    def crawl_search_result_verbose(self, _):
         if _ is None:
             return
         response, feed = _
@@ -298,10 +292,11 @@ class FeedlyRSSSpider(Spider):
         self.logger.info(f'Loading from {feed}')
         return self.next_page({'id': feed}, response=response, initial=True)
 
-    def digest_feed_export(self, digest_file) -> JSONDict:
-        items = utils.load_jsonlines(digest_file)
+    def digest_feed_export(self, stream) -> JSONDict:
+        self.logger.info('Digesting crawled data, this may take a while...')
+
+        items = utils.load_jsonlines(stream)
         items = {item['id_hash']: item for item in items}
-        digest = {'items': items}
 
         resources = HyperlinkStore()
         for item in items.values():
@@ -311,12 +306,13 @@ class FeedlyRSSSpider(Spider):
                     feedly_id=item['id_hash'],
                     feedly_keyword=set(item['keywords']),
                 )
-        digest['resources'] = resources
 
-        return json.dumps(
-            digest,
-            ensure_ascii=True,
-            default=utils.json_converters,
-            for_json=True,
-            iterable_as_array=True,
-        )
+        path = self.config['OUTPUT'].joinpath('entries.json')
+        with open(path, 'w') as f:
+            self.logger.info(f'Saving feed content to {path} ...')
+            json.dump(items, f, **utils.SIMPLEJSON_KWARGS)
+
+        path = self.config['OUTPUT'].joinpath('resources.json')
+        with open(path, 'w') as f:
+            self.logger.info(f'Saving external links to {path} ...')
+            json.dump(resources, f, **utils.SIMPLEJSON_KWARGS)

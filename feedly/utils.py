@@ -166,10 +166,14 @@ class HyperlinkStore(KeywordStore):
                     'source': {source},
                     'domain': set(domain_parents(urlsplit(url).netloc)),
                     'tag': set(),
-                    'id': set(),
-                    'class': set(),
                 }
                 keywords['tag'].add(tag.xpath('name()').get())
-                keywords['id'] |= set(tag.xpath('@id').getall())
-                keywords['class'] |= set(tag.xpath('@class').getall())
                 self.put(url, **keywords, **kwargs)
+
+
+SIMPLEJSON_KWARGS = {
+    'ensure_ascii': True,
+    'default': json_converters,
+    'for_json': True,
+    'iterable_as_array': True,
+}

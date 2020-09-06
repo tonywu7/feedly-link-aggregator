@@ -52,6 +52,8 @@ ROBOTSTXT_OBEY = True
 #    'feedly.middlewares.FeedlySpiderMiddleware': 543,
 # }
 
+HTTPERROR_ALLOWED_CODES = [403, 404]
+
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
@@ -88,7 +90,7 @@ AUTOTHROTTLE_START_DELAY = 5
 AUTOTHROTTLE_MAX_DELAY = 60
 # The average number of requests Scrapy should be sending in parallel to
 # each remote server
-AUTOTHROTTLE_TARGET_CONCURRENCY = .9
+AUTOTHROTTLE_TARGET_CONCURRENCY = 1.2
 # Enable showing throttling stats for every response received:
 AUTOTHROTTLE_DEBUG = False
 
