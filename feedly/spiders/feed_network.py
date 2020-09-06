@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import time
 from typing import List, Union
 from urllib.parse import urlsplit
 
@@ -28,10 +27,10 @@ import igraph
 import simplejson as json
 from scrapy.http import Request, TextResponse
 
-from .single_feed import FeedlyRSSSpider
 from .. import utils
 from ..feedly import FeedlyEntry
 from ..utils import JSONDict
+from .rss_spider import FeedlyRSSSpider
 
 
 class SiteNetworkSpider(FeedlyRSSSpider):
@@ -44,15 +43,6 @@ class SiteNetworkSpider(FeedlyRSSSpider):
             'feedly.spiders.feed_network.GraphExpansionMiddleware': 900,
         },
     })
-
-    NODE_TRANSFORMS = {
-        'feeds': lambda c: list(set(c)),
-        'names': lambda c: list(set(c)),
-        'keywords': lambda c: list({k.lower() for k in c}),
-    }
-    EDGE_TRANSFORMS = {
-        'hrefs': lambda c: list({tuple(h) for h in c}),
-    }
 
     class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
         OVERWRITE = True
@@ -72,11 +62,19 @@ class SiteNetworkSpider(FeedlyRSSSpider):
 
         self.logstats_items.extend([
             'rss/hyperlink_count',
-            'network/discovered_nodes',
-            'network/scheduled_nodes',
-            'network/finished_nodes',
-            'network/explored',
+            'network/1_discovered_nodes',
+            'network/2_scheduled_nodes',
+            'network/3_finished_nodes',
+            'network/4_explored',
         ])
+
+    def start_requests(self):
+        return (
+            super().start_requests()
+            .then(self.start_search(self.config['FEED']))
+            .then(self.crawl_search_result)
+            .catch(self.log_exception)
+        )
 
     def crawl_search_result(self, _):
         if _ is None:
@@ -128,25 +126,6 @@ class SiteNetworkSpider(FeedlyRSSSpider):
 
         return g, items, resources
 
-    def digest_feed_export(self, stream):
-        self.logger.info('Digesting crawled data, this may take a while...')
-        g, items, resources = self._digest(stream)
-
-        path = self.config['OUTPUT'].joinpath('index.graphml')
-        with open(path, 'w') as f:
-            self.logger.info(f'Saving graph to {path} ...')
-            g.write(f, format='graphml')
-
-        path = self.config['OUTPUT'].joinpath('entries.json')
-        with open(path, 'w') as f:
-            self.logger.info(f'Saving feed content to {path} ...')
-            json.dump(items, f, **utils.SIMPLEJSON_KWARGS)
-
-        path = self.config['OUTPUT'].joinpath('resources.json')
-        with open(path, 'w') as f:
-            self.logger.info(f'Saving feed content to {path} ...')
-            json.dump(items, f, **utils.SIMPLEJSON_KWARGS)
-
 
 class GraphExpansionMiddleware:
     @classmethod
@@ -158,19 +137,22 @@ class GraphExpansionMiddleware:
         self._discovered = set()
 
     def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: SiteNetworkSpider):
-        depth = response.meta.get('depth')
+        depth = response.meta.get('depth', 0)
         for item in result:
-            if not isinstance(item, FeedlyEntry):
+            if isinstance(item, Request) or 'entry' not in item:
                 yield item
                 continue
+            entry = item['entry']
+            store = item['urls']
             self.stats.inc_value('rss/page_count')
-            yield from self.process_item(response, item, spider, depth)
+            yield from self.process_item(response, entry, store, depth, spider)
+            yield item
 
-    def process_item(self, response: TextResponse, item: FeedlyEntry, spider: SiteNetworkSpider, depth=None):
-        store = utils.HyperlinkStore()
-        for k, v in item.markup.items():
-            store.parse_html(item.url, v)
-
+    def process_item(
+        self, response: TextResponse,
+        entry: FeedlyEntry, store: utils.HyperlinkStore, depth: int,
+        spider: SiteNetworkSpider,
+    ):
         dest = {urlsplit(k): v for k, v in store.items()}
         dest = {k: v for k, v in dest.items() if k.netloc}
         self.stats.inc_value('rss/hyperlink_count', len(dest))
@@ -182,14 +164,14 @@ class GraphExpansionMiddleware:
         for url in sites:
             spider.logger.debug(f'Possible new feed {url} (depth={depth})')
 
-            def set_priority(r: TextResponse):
-                if r.status >= 400:
-                    return response.request.priority + 100
-                else:
-                    return response.request.priority - 100
+            # def set_priority(r: TextResponse):
+            #     if r.status >= 400:
+            #         return response.request.priority + 100
+            #     else:
+            #         return response.request.priority - 100
 
-            def default_priority(failure):
-                return 0
+            # def default_priority(failure):
+            #     return 0
 
             def start_crawl(priority):
                 return spider.start_feed(
@@ -198,13 +180,9 @@ class GraphExpansionMiddleware:
                         'inc_depth': True,
                         'depth': depth,
                         'reason': 'newly_discovered',
-                        'source_item': item,
+                        'source_item': entry,
                     },
                 )
-
-            def log(exc):
-                self.logger.error(exc, exc_info=True)
-                self.logger.error(f'in {url}')
 
             yield from (  # noqa: ECE001
                 # fetch(url, method='HEAD', meta={'inc_depth': True, 'depth': depth})
@@ -213,32 +191,22 @@ class GraphExpansionMiddleware:
                 start_crawl(0)
                 .then(spider.start_search(url))
                 .then(spider.crawl_search_result)
-                .catch(log)
-                # .catch(spider.log_exception)
+                .catch(spider.log_exception)
                 .finally_(self.update_finished)
             )
 
-        self.stats.set_value('network/discovered_nodes', len(self._discovered))
+        self.stats.set_value('network/1_discovered_nodes', len(self._discovered))
         depth_limit = spider.config.getint('DEPTH_LIMIT')
         if depth_limit and depth < depth_limit or not depth_limit:
-            self.stats.inc_value('network/scheduled_nodes', len(sites))
+            self.stats.inc_value('network/2_scheduled_nodes', len(sites))
         self.update_ratio()
 
-        yield {
-            '_graph': 1,
-            'src': item.url,
-            'dests': store,
-            'depth': depth,
-            'time_crawled': time.time(),
-            'metadata': item,
-        }
-
     def update_finished(self):
-        finished = self.stats.get_value('network/finished_nodes', 0)
+        finished = self.stats.get_value('network/3_finished_nodes', 0)
         finished += 1
-        self.stats.set_value('network/finished_nodes', finished)
+        self.stats.set_value('network/3_finished_nodes', finished)
         self.update_ratio()
 
     def update_ratio(self):
-        ratio = self.stats.get_value('network/finished_nodes', 0) / self.stats.get_value('network/scheduled_nodes', 1)
-        self.stats.set_value('network/explored', f'{ratio * 100:.2f}%')
+        ratio = self.stats.get_value('network/3_finished_nodes', 0) / self.stats.get_value('network/2_scheduled_nodes', 1)
+        self.stats.set_value('network/4_explored', f'{ratio * 100:.2f}%')
