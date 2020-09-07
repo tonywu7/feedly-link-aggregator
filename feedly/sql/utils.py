@@ -34,30 +34,28 @@ for cmdf in os.listdir(SQL_REPO):
         commands[cmdf[:-4]] = f.read()
 
 
-def create_all(conn, cursor):
-    for name, cmd in commands.items():
-        if name[:5] == 'init_':
-            cursor.executescript(cmd)
-    conn.commit()
+def create_all(conn):
+    with conn:
+        for name, cmd in commands.items():
+            if name[:5] == 'init_':
+                conn.executescript(cmd)
 
 
-def verify_version(conn, cursor, target_ver):
-    cursor.execute('SELECT version FROM __version__;')
-    db_ver = cursor.fetchone()
+def verify_version(conn, target_ver):
+    db_ver = conn.execute('SELECT version FROM __version__;').fetchone()
     if not db_ver:
-        cursor.execute('INSERT INTO __version__ (version) VALUES (?)', (target_ver,))
-        conn.commit()
+        with conn:
+            conn.execute('INSERT INTO __version__ (version) VALUES (?)', (target_ver,))
     else:
         db_ver = db_ver[0]
         if db_ver != target_ver:
             raise ValueError(f'Cannot write to database of version {db_ver}; currently supported version: {target_ver}')
 
 
-def select_max_rowids(cursor, tables):
+def select_max_rowids(conn, tables):
     max_row = {}
     for table in tables:
-        cursor.execute(f'SELECT max(id) FROM {table}')
-        row = cursor.fetchone()
+        row = conn.execute(f'SELECT max(id) FROM {table}').fetchone()
         if row is None:
             row = [None]
         max_id = row[0] or 0
@@ -84,57 +82,54 @@ def load_identity_config():
     return config
 
 
-def select_identity(cursor, table, config):
+def select_identity(conn, table, config):
     opts = config.keys()
     if opts == {PRIMARY_KEY, AUTOINCREMENT, UNIQUE}:
-        return _make_unique_auto_mapping(cursor, table, config)
+        return _make_unique_auto_mapping(conn, table, config)
     if opts == {PRIMARY_KEY, AUTOINCREMENT}:
-        return _make_pk_auto_mapping(cursor, table, config)
+        return _make_pk_auto_mapping(conn, table, config)
     if opts == {PRIMARY_KEY, UNIQUE}:
-        return _make_unique_pk_mapping(cursor, table, config)
+        return _make_unique_pk_mapping(conn, table, config)
     if opts == {PRIMARY_KEY}:
-        return _make_pk_mapping(cursor, table, config)
+        return _make_pk_mapping(conn, table, config)
 
 
-def _make_unique_auto_mapping(cursor, table, config):
+def _make_unique_auto_mapping(conn, table, config):
     if config[PRIMARY_KEY] != config[AUTOINCREMENT]:
-        return _make_unique_pk_mapping(cursor, table, config)
-    keys = _select_unique(cursor, table, config)
-    values = _select_auto(cursor, table, config)
+        return _make_unique_pk_mapping(conn, table, config)
+    keys = _select_unique(conn, table, config)
+    values = _select_auto(conn, table, config)
     return {k: v for k, v in zip(keys, values)}
 
 
-def _make_pk_auto_mapping(cursor, table, config):
-    keys = _select_pk(cursor, table, config)
-    values = _select_auto(cursor, table, config)
+def _make_pk_auto_mapping(conn, table, config):
+    keys = _select_pk(conn, table, config)
+    values = _select_auto(conn, table, config)
     return {k: v for k, v in zip(keys, values)}
 
 
-def _make_unique_pk_mapping(cursor, table, config):
-    keys = _select_unique(cursor, table, config)
-    values = _select_pk(cursor, table, config)
+def _make_unique_pk_mapping(conn, table, config):
+    keys = _select_unique(conn, table, config)
+    values = _select_pk(conn, table, config)
     return {k: v for k, v in zip(keys, values)}
 
 
-def _make_pk_mapping(cursor, table, config):
-    keys = _select_pk(cursor, table, config)
+def _make_pk_mapping(conn, table, config):
+    keys = _select_pk(conn, table, config)
     return {k: True for k in keys}
 
 
-def _select_unique(cursor, table, config):
+def _select_unique(conn, table, config):
     columns = []
     for t in config[UNIQUE]:
         cols = ', '.join(t)
-        cursor.execute(f'SELECT {cols} FROM {table}')
-        columns.append(cursor.fetchall())
+        columns.append(conn.execute(f'SELECT {cols} FROM {table}').fetchall())
     return zip(*columns)
 
 
-def _select_pk(cursor, table, config):
-    cursor.execute(f'SELECT {", ".join(config[PRIMARY_KEY])} FROM {table}')
-    return cursor.fetchall()
+def _select_pk(conn, table, config):
+    return conn.execute(f'SELECT {", ".join(config[PRIMARY_KEY])} FROM {table}').fetchall()
 
 
-def _select_auto(cursor, table, config):
-    cursor.execute(f'SELECT {config[AUTOINCREMENT][0]} FROM {table}')
-    return [t[0] for t in cursor.fetchall()]
+def _select_auto(conn, table, config):
+    return [t[0] for t in conn.execute(f'SELECT {config[AUTOINCREMENT][0]} FROM {table}').fetchall()]
