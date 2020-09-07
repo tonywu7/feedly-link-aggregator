@@ -40,7 +40,7 @@ class SiteNetworkSpider(FeedlyRSSSpider):
         'SPIDER_MIDDLEWARES': {
             'feedly.spiders.single_feed.FeedResourceMiddleware': None,
             'feedly.spiders.single_feed.FeedEntryMiddleware': None,
-            'feedly.spiders.feed_network.GraphExpansionMiddleware': 900,
+            'feedly.spiders.feed_network.ExplorationSpiderMiddleware': 900,
         },
     })
 
@@ -127,7 +127,7 @@ class SiteNetworkSpider(FeedlyRSSSpider):
         return g, items, resources
 
 
-class GraphExpansionMiddleware:
+class ExplorationSpiderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
         return cls(crawler)
@@ -138,19 +138,19 @@ class GraphExpansionMiddleware:
 
     def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: SiteNetworkSpider):
         depth = response.meta.get('depth', 0)
-        for item in result:
-            if isinstance(item, Request) or 'entry' not in item:
-                yield item
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data:
+                yield data
                 continue
-            entry = item['entry']
-            store = item['urls']
+            item = data['item']
+            store = data['urls']
             self.stats.inc_value('rss/page_count')
-            yield from self.process_item(response, entry, store, depth, spider)
-            yield item
+            yield from self.process_item(response, item, store, depth, spider)
+            yield data
 
     def process_item(
         self, response: TextResponse,
-        entry: FeedlyEntry, store: utils.HyperlinkStore, depth: int,
+        item: FeedlyEntry, store: utils.HyperlinkStore, depth: int,
         spider: SiteNetworkSpider,
     ):
         dest = {urlsplit(k): v for k, v in store.items()}
@@ -162,7 +162,7 @@ class GraphExpansionMiddleware:
         spider.logger.debug(f'depth={depth}; +{len(sites)}')
 
         for url in sites:
-            spider.logger.debug(f'Possible new feed {url} (depth={depth})')
+            spider.logger.debug(f'{url} (depth={depth})')
 
             # def set_priority(r: TextResponse):
             #     if r.status >= 400:
@@ -180,7 +180,7 @@ class GraphExpansionMiddleware:
                         'inc_depth': True,
                         'depth': depth,
                         'reason': 'newly_discovered',
-                        'source_item': entry,
+                        'source_item': item,
                     },
                 )
 

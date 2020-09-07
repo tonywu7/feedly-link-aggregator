@@ -56,6 +56,12 @@ def get_feed_uri(s):
     return s.split('/', 1)[1]
 
 
+def lowercase_set(iterable=None):
+    if not iterable:
+        return set()
+    return {str(k).lower() for k in iterable}
+
+
 @attr.s(kw_only=True, frozen=True)
 class FeedlyEntry:
     _id: str = attr.ib(default=None, repr=False, eq=False, order=False)
@@ -64,9 +70,9 @@ class FeedlyEntry:
     url: str = attr.ib()
     published: datetime = attr.ib(converter=utils.datetime_converters)
     updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters), repr=False)
-    origin: Dict[str, str] = attr.ib(factory=dict, repr=False)
+    source: Dict[str, str] = attr.ib(factory=dict, repr=False)
 
-    keywords: Keywords = attr.ib(converter=utils.ensure_collection(set), factory=set, repr=False)
+    keywords: Keywords = attr.ib(converter=utils.ensure_collection(lowercase_set), factory=lowercase_set, repr=False)
     author: Optional[str] = attr.ib(default=None, repr=False)
 
     markup: Dict[str, str] = attr.ib(factory=dict, repr=False)
@@ -80,7 +86,7 @@ class FeedlyEntry:
                 data[name] = value
         data['id'] = item['id']
         data['url'] = cls._get_page_url(item)
-        data['origin'] = cls._get_origin_url(item)
+        data['source'] = cls._get_source_url(item)
         entry = cls(**data)
         cls._set_markup(entry, item)
         return entry
@@ -98,13 +104,13 @@ class FeedlyEntry:
         return url
 
     @staticmethod
-    def _get_origin_url(item):
-        origin = item.get('origin')
-        if origin:
+    def _get_source_url(item):
+        source = item.get('origin')
+        if source:
             return {
-                'feed': get_feed_uri(origin.get('streamId', '/')),
-                'title': origin.get('title'),
-                'homepage': origin.get('htmlUrl'),
+                'feed': get_feed_uri(source.get('streamId', '/')),
+                'title': source.get('title'),
+                'homepage': source.get('htmlUrl'),
             }
 
     @staticmethod

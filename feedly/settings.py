@@ -9,6 +9,8 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
+__version__ = '0.10'
+
 BOT_NAME = 'feedly'
 
 SPIDER_MODULES = ['feedly.spiders']
@@ -18,7 +20,7 @@ LOG_ENABLED = False
 LOG_LEVEL = 20
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
-USER_AGENT = 'Mozilla/5.0 (compatible; hyperlinkaggregator/0.3; +https://github.com/monotony113/feedly-link-aggregator)'
+USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkaggregator/{__version__}; +https://github.com/monotony113/feedly-link-aggregator)'
 
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = True

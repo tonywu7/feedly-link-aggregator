@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sqlite3
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -38,7 +39,7 @@ from urllib.parse import unquote, urlsplit
 import simplejson as json
 from scrapy import Spider
 from scrapy.exceptions import IgnoreRequest
-from scrapy.http import TextResponse
+from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
 from scrapy_promise import Promise, fetch
 from twisted.python.failure import Failure
@@ -47,6 +48,8 @@ from .. import feedly, utils
 from ..config import Config
 from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
+from ..settings import __version__
+from ..sql import utils as db_utils
 from ..utils import HyperlinkStore, JSONDict
 
 log = logging.getLogger('feedly.spiders')
@@ -65,6 +68,7 @@ class FeedlyRSSSpider(Spider, ABC):
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
+            'feedly.spiders.rss_spider.SQLFormatSpiderMiddleware': 200,
         },
     }
 
@@ -224,13 +228,16 @@ class FeedlyRSSSpider(Spider, ABC):
 
         data = _guard_json(response.text)
         items = data.get('items')
+        source = response.meta["feed_url"]
         if items:
             response.meta['valid_feed'] = True
             if response.meta.get('reason') != 'continuation':
-                self.logger.info(f'Got new RSS feed at {response.meta["feed_url"]}')
+                self.logger.info(f'Got new RSS feed at {source}')
 
         for item in items:
             entry = FeedlyEntry.from_upstream(item)
+            if not entry.source:
+                entry.source = {'feed': source}
             if not entry:
                 continue
             self.stats.inc_value('rss/page_count')
@@ -238,14 +245,10 @@ class FeedlyRSSSpider(Spider, ABC):
             depth = response.meta.get('depth', 0)
             store = utils.HyperlinkStore()
             for k, v in entry.markup.items():
-                store.parse_html(
-                    entry.url, v,
-                    keyword={entry.id_hash},
-                    feedly_id=entry.keywords,
-                )
+                store.parse_html(entry.url, v)
 
             yield {
-                'entry': entry,
+                'item': entry,
                 'urls': store,
                 'depth': depth,
                 'time_crawled': time.time(),
@@ -279,5 +282,170 @@ class FeedlyRSSSpider(Spider, ABC):
             return response, []
         return response, [feed['feedId'] for feed in res['results']]
 
-    def digest_feed_export(self, stream) -> JSONDict:
+    def digest_feed_export(self, stream):
         self.logger.info('Digesting crawled data, this may take a while...')
+
+        conn = sqlite3.connect(self.config['OUTPUT'].joinpath('index.db'))
+        cursor = conn.cursor()
+
+        db_utils.create_all(conn, cursor)
+        db_utils.verify_version(conn, cursor, __version__)
+        identity_conf = db_utils.load_identity_config()
+
+        tables = ('item', 'keyword', 'markup', 'url')
+        max_row = db_utils.select_max_rowids(cursor, tables)
+
+        def autoinc(table, staged):
+            return range(max_row[table], max_row[table] + len(staged))
+
+        identities = {}
+        for table, conf in identity_conf.items():
+            identities[table] = db_utils.select_identity(cursor, table, conf)
+
+        self.logger.info('Existing records:')
+        for name, rows in identities.items():
+            if name[0] != '_':
+                self.logger.info(f'  {name}: {len(rows)}')
+
+        ids_url = identities['url']
+        ids_item = identities['item']
+        ids_keyword = identities['keyword']
+
+        hyperlinks = {}
+        items = {}
+        feeds = {}
+        markup = {}
+        taggings = []
+
+        next_line = stream.readline()
+        while next_line:
+            data: JSONDict = json.loads(next_line.rstrip())
+            rowtype = data.pop('__')
+
+            if rowtype == 'url':
+                id_ = ((data['url'],),)
+                ids_url.setdefault(id_, None)
+            if rowtype == 'keyword':
+                id_ = ((data['keyword'],),)
+                ids_keyword.setdefault(id_, None)
+            if rowtype == 'item':
+                id_ = ((data['hash'],),)
+                ids_item.setdefault(id_, None)
+                items[id_] = data
+            if rowtype == 'hyperlink':
+                hyperlinks[(data['source_id'], data['target_id'])] = data
+            if rowtype == 'feed':
+                feeds[data['url_id']] = data
+            if rowtype == 'markup':
+                markup[(data['item_id'], data['type'])] = data
+            if rowtype == 'tagging':
+                taggings.append(data)
+
+            next_line = stream.readline()
+
+        staged = [u for u, i in ids_url.items() if i is None]
+        staged = {u: i for i, u in zip(autoinc('url', staged), staged)}
+        ids_url.update(staged)
+        staged = [(u[0][0], i) for u, i in staged.items()]
+        self.logger.info(f'New URLs: {len(staged)}')
+        cursor.executemany(
+            'INSERT INTO url (url, id) VALUES (?, ?)', staged,
+        )
+        conn.commit()
+
+        staged = [k for k, i in ids_keyword.items() if i is None]
+        staged = {k: i for i, k in zip(autoinc('keyword', staged), staged)}
+        ids_keyword.update(staged)
+        staged = [(k[0][0], i) for k, i in staged.items()]
+        cursor.executemany(
+            'INSERT INTO keyword (keyword, id) VALUES (?, ?)', staged,
+        )
+        conn.commit()
+
+        staged = [f for f, i in ids_item.items() if i is None]
+        staged = {f: items[f] for f in staged}
+        for i, item in zip(autoinc('item', staged), staged.values()):
+            item['id'] = i
+            item['url'] = ids_url[((item['url'],),)]
+            item['source'] = ids_url[((item['source'],),)]
+        ids_item.update({k: v['id'] for k, v in staged.items()})
+        self.logger.info(f'New webpages: {len(staged)}')
+        cursor.executemany(
+            'INSERT INTO item (id, hash, url, source, author, published, updated, crawled)'
+            'VALUES (:id, :hash, :url, :source, :author, :published, :updated, :crawled)',
+            staged.values(),
+        )
+        conn.commit()
+
+        staged = {(ids_url[((p[0],),)], ids_url[((p[1],),)]): t for p, t in hyperlinks.items()}
+        staged = {p: t for p, t in staged.items() if p not in identities['hyperlink']}
+        staged = [(p[0], p[1], t['html_tag']) for p, t in staged.items()]
+        self.logger.info(f'New hyperlinks: {len(staged)}')
+        cursor.executemany(
+            'INSERT INTO hyperlink (source_id, target_id, html_tag) VALUES (?, ?, ?)', staged,
+        )
+        conn.commit()
+
+        staged = {ids_url[((k,),)]: v.get('title', '') for k, v in feeds.items()}
+        staged = {k: v for k, v in staged.items() if (k,) not in identities['feed']}
+        staged = [(u, t) for u, t in staged.items()]
+        self.logger.info(f'New feed sources: {len(staged)}')
+        cursor.executemany(
+            'INSERT INTO feed (url_id, title) VALUES (?, ?)', staged,
+        )
+        conn.commit()
+
+        staged = {(ids_item[((k[0],),)], k[1]): v for k, v in markup.items()}
+        staged = {k: v for k, v in staged.items() if (k,) not in identities['markup']}
+        staged = [(k[0], k[1], v['markup']) for k, v in staged.items()]
+        cursor.executemany(
+            'INSERT INTO markup (item_id, type, markup) VALUES (?, ?, ?)', staged,
+        )
+        conn.commit()
+
+        staged = [(ids_item[((t['item_id'],),)], ids_keyword[((t['keyword_id'],),)]) for t in taggings]
+        staged = {t for t in staged if t not in identities['tagging']}
+        cursor.executemany(
+            'INSERT INTO tagging (item_id, keyword_id) VALUES (?, ?)', staged,
+        )
+        conn.commit()
+
+        conn.close()
+
+
+class SQLFormatSpiderMiddleware:
+    def process_spider_output(self, response, result, spider):
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data:
+                yield data
+                continue
+            item: FeedlyEntry = data['item']
+            urls: utils.HyperlinkStore = data['urls']
+
+            yield {
+                '__': 'item',
+                'hash': item.id_hash,
+                'url': item.url,
+                'source': item.source['feed'],
+                'author': item.author,
+                'published': item.published.isoformat(),
+                'updated': item.updated.isoformat() if item.updated else None,
+                'crawled': data['time_crawled'],
+            }
+
+            src = item.url
+            yield {'__': 'url', 'url': src}
+            for u, kws in urls.items():
+                yield {'__': 'url', 'url': u}
+                yield {'__': 'hyperlink', 'source_id': src, 'target_id': u, 'html_tag': list(kws['tag'])[0]}
+
+            for k in item.keywords:
+                yield {'__': 'keyword', 'keyword': k}
+                yield {'__': 'tagging', 'item_id': item.id_hash, 'keyword_id': k}
+
+            feed = item.source['feed']
+            yield {'__': 'url', 'url': feed}
+            yield {'__': 'feed', 'url_id': feed, 'title': item.source.get('title', '')}
+
+            for t, m in item.markup.items():
+                yield {'__': 'markup', 'item_id': item.id_hash, 'type': t, 'markup': m}
