@@ -208,5 +208,9 @@ class ExplorationSpiderMiddleware:
         self.update_ratio()
 
     def update_ratio(self):
-        ratio = self.stats.get_value('network/3_finished_nodes', 0) / self.stats.get_value('network/2_scheduled_nodes', 1)
+        finished = self.stats.get_value('network/3_finished_nodes', 0)
+        scheduled = self.stats.get_value('network/2_scheduled_nodes', 1)
+        if not scheduled:
+            return
+        ratio = finished / scheduled
         self.stats.set_value('network/4_explored', f'{ratio * 100:.2f}%')

@@ -1,7 +1,5 @@
 # MIT License
 #
-# Copyright (c) 2020 # MIT License
-#
 # Copyright (c) 2020 Tony Wu <tony[dot]wu(at)nyu[dot]edu>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -40,7 +38,7 @@ import simplejson as json
 from scrapy import Spider
 from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, TextResponse
-from scrapy.signals import spider_opened
+from scrapy.signals import spider_opened, spider_closed
 from scrapy_promise import Promise, fetch
 from twisted.python.failure import Failure
 
@@ -48,9 +46,9 @@ from .. import feedly, utils
 from ..config import Config
 from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
-from ..settings import __version__
+from ..sql import SCHEMA_VERSION
 from ..sql import utils as db_utils
-from ..utils import HyperlinkStore, JSONDict
+from ..utils import JSONDict
 
 log = logging.getLogger('feedly.spiders')
 
@@ -68,7 +66,8 @@ class FeedlyRSSSpider(Spider, ABC):
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            'feedly.spiders.rss_spider.SQLFormatSpiderMiddleware': 200,
+            'feedly.spiders.rss_spider.SQLExporterSpiderMiddleware': 200,
+            'feedly.spiders.rss_spider.PersistenceSpiderMiddleware': 300,
         },
     }
 
@@ -114,12 +113,6 @@ class FeedlyRSSSpider(Spider, ABC):
         templates = {re.compile(k): v for k, v in config['FEED_TEMPLATES'].items()}
         config['FEED_TEMPLATES'] = templates
 
-        index = {
-            'items': {},
-            'resources': HyperlinkStore(),
-        }
-        self.index: JSONDict = index
-
         self.api_base_params = {
             'count': int(config['DOWNLOAD_PER_BATCH']),
             'ranked': config['DOWNLOAD_ORDER'],
@@ -141,23 +134,25 @@ class FeedlyRSSSpider(Spider, ABC):
     def get_streams_url(self, feed_id, **params):
         return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
 
-    def start_feed(self, query, **kwargs):
+    def start_feed(self, query, derive=True, **kwargs):
         prefix = self.config['STREAM_ID_PREFIX']
-        url_templates = self.config['FEED_TEMPLATES']
-
-        effective_templates = {k: v for k, v in url_templates.items() if k.match(query)}
-        query_parsed = urlsplit(query)
-        specifiers = {
-            **query_parsed._asdict(),
-            'network_path': utils.no_scheme(query_parsed),
-            'path_query': utils.path_only(query_parsed),
-            'original': query_parsed.geturl(),
-        }
-        urls = {t % specifiers: None for _, t in sorted(
-            (priority, tmpl)
-            for pattern, tmpls in effective_templates.items()
-            for tmpl, priority in tmpls.items()
-        )}
+        if derive:
+            url_templates = self.config['FEED_TEMPLATES']
+            effective_templates = {k: v for k, v in url_templates.items() if k.match(query)}
+            query_parsed = urlsplit(query)
+            specifiers = {
+                **query_parsed._asdict(),
+                'network_path': utils.no_scheme(query_parsed),
+                'path_query': utils.path_only(query_parsed),
+                'original': query_parsed.geturl(),
+            }
+            urls = {t % specifiers: None for _, t in sorted(
+                (priority, tmpl)
+                for pattern, tmpls in effective_templates.items()
+                for tmpl, priority in tmpls.items()
+            )}
+        else:
+            urls = [query]
 
         meta = kwargs.pop('meta', {})
         meta = {**meta, 'inc_depth': True}
@@ -204,7 +199,8 @@ class FeedlyRSSSpider(Spider, ABC):
         if not initial:
             meta['no_filter'] = True
             meta.pop('inc_depth', None)
-        meta['feed_url'] = feedly.get_feed_uri(feed)
+        feed_url = feedly.get_feed_uri(feed)
+        meta['feed_url'] = feed_url
 
         params = {}
         cont = data.get('continuation')
@@ -214,12 +210,16 @@ class FeedlyRSSSpider(Spider, ABC):
         elif not initial:
             raise FeedExhausted(response)
 
-        self.logger.debug(f'initial={initial} depth={meta.get("depth")} reason={meta["reason"]} {feed}')
+        depth = meta.get('depth')
+        reason = meta.get('reason')
+        self.logger.debug(f'initial={initial} depth={depth} reason={reason} {feed}')
+
         url = self.get_streams_url(feed, **params)
         if response:
             request = fetch(url, base=response.request, meta=meta, **kwargs)
         else:
             request = fetch(url, meta=meta, **kwargs)
+
         return request.then(self.parse_feed).catch(self.close_feed)
 
     def parse_feed(self, response: TextResponse):
@@ -228,7 +228,7 @@ class FeedlyRSSSpider(Spider, ABC):
 
         data = _guard_json(response.text)
         items = data.get('items')
-        source = response.meta["feed_url"]
+        source = response.meta['feed_url']
         if items:
             response.meta['valid_feed'] = True
             if response.meta.get('reason') != 'continuation':
@@ -253,6 +253,7 @@ class FeedlyRSSSpider(Spider, ABC):
                 'depth': depth,
                 'time_crawled': time.time(),
             }
+            yield {'_persist': 'crawling', 'request': response.request}
 
         return self.next_page(data, response=response)
 
@@ -262,6 +263,7 @@ class FeedlyRSSSpider(Spider, ABC):
                 return {}
         if isinstance(exc, FeedExhausted):
             response = exc.response
+            yield {'_persist': 'finished', 'request': response.request}
             if response and response.meta.get('valid_feed'):
                 return {}
             self.logger.debug(f'Empty feed {response.meta.get("feed_url")}')
@@ -286,21 +288,31 @@ class FeedlyRSSSpider(Spider, ABC):
         self.logger.info('Digesting crawled data, this may take a while...')
 
         conn = sqlite3.connect(self.config['OUTPUT'].joinpath('index.db'))
-        cursor = conn.cursor()
 
-        db_utils.create_all(conn, cursor)
-        db_utils.verify_version(conn, cursor, __version__)
+        db_utils.create_all(conn)
+        db_utils.verify_version(conn, SCHEMA_VERSION)
         identity_conf = db_utils.load_identity_config()
 
         tables = ('item', 'keyword', 'markup', 'url')
-        max_row = db_utils.select_max_rowids(cursor, tables)
+        max_row = db_utils.select_max_rowids(conn, tables)
 
         def autoinc(table, staged):
             return range(max_row[table], max_row[table] + len(staged))
 
+        def bulk_op(statement, values):
+            try:
+                with conn:
+                    conn.executemany(statement, values)
+            except sqlite3.OperationalError as e:
+                self.logger.error(e, exc_info=True)
+                self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
+                self.logger.error('Move the existing file somewhere else.')
+                self.logger.error('(Unprocessed crawled data remain in `stream.jsonl`)')
+                raise
+
         identities = {}
         for table, conf in identity_conf.items():
-            identities[table] = db_utils.select_identity(cursor, table, conf)
+            identities[table] = db_utils.select_identity(conn, table, conf)
 
         self.logger.info('Existing records:')
         for name, rows in identities.items():
@@ -317,10 +329,11 @@ class FeedlyRSSSpider(Spider, ABC):
         markup = {}
         taggings = []
 
+        self.logger.info('Reading item stream...')
         next_line = stream.readline()
         while next_line:
             data: JSONDict = json.loads(next_line.rstrip())
-            rowtype = data.pop('__')
+            rowtype = data.pop('__', '')
 
             if rowtype == 'url':
                 id_ = ((data['url'],),)
@@ -348,19 +361,13 @@ class FeedlyRSSSpider(Spider, ABC):
         ids_url.update(staged)
         staged = [(u[0][0], i) for u, i in staged.items()]
         self.logger.info(f'New URLs: {len(staged)}')
-        cursor.executemany(
-            'INSERT INTO url (url, id) VALUES (?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO url (url, id) VALUES (?, ?)', staged)
 
         staged = [k for k, i in ids_keyword.items() if i is None]
         staged = {k: i for i, k in zip(autoinc('keyword', staged), staged)}
         ids_keyword.update(staged)
         staged = [(k[0][0], i) for k, i in staged.items()]
-        cursor.executemany(
-            'INSERT INTO keyword (keyword, id) VALUES (?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO keyword (keyword, id) VALUES (?, ?)', staged)
 
         staged = [f for f, i in ids_item.items() if i is None]
         staged = {f: items[f] for f in staged}
@@ -369,51 +376,38 @@ class FeedlyRSSSpider(Spider, ABC):
             item['url'] = ids_url[((item['url'],),)]
             item['source'] = ids_url[((item['source'],),)]
         ids_item.update({k: v['id'] for k, v in staged.items()})
-        self.logger.info(f'New webpages: {len(staged)}')
-        cursor.executemany(
+        self.logger.info(f'New pages: {len(staged)}')
+        bulk_op(
             'INSERT INTO item (id, hash, url, source, author, published, updated, crawled)'
             'VALUES (:id, :hash, :url, :source, :author, :published, :updated, :crawled)',
             staged.values(),
         )
-        conn.commit()
 
         staged = {(ids_url[((p[0],),)], ids_url[((p[1],),)]): t for p, t in hyperlinks.items()}
         staged = {p: t for p, t in staged.items() if p not in identities['hyperlink']}
         staged = [(p[0], p[1], t['html_tag']) for p, t in staged.items()]
         self.logger.info(f'New hyperlinks: {len(staged)}')
-        cursor.executemany(
-            'INSERT INTO hyperlink (source_id, target_id, html_tag) VALUES (?, ?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO hyperlink (source_id, target_id, html_tag) VALUES (?, ?, ?)', staged)
 
         staged = {ids_url[((k,),)]: v.get('title', '') for k, v in feeds.items()}
         staged = {k: v for k, v in staged.items() if (k,) not in identities['feed']}
         staged = [(u, t) for u, t in staged.items()]
         self.logger.info(f'New feed sources: {len(staged)}')
-        cursor.executemany(
-            'INSERT INTO feed (url_id, title) VALUES (?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO feed (url_id, title) VALUES (?, ?)', staged)
 
         staged = {(ids_item[((k[0],),)], k[1]): v for k, v in markup.items()}
         staged = {k: v for k, v in staged.items() if (k,) not in identities['markup']}
         staged = [(k[0], k[1], v['markup']) for k, v in staged.items()]
-        cursor.executemany(
-            'INSERT INTO markup (item_id, type, markup) VALUES (?, ?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO markup (item_id, type, markup) VALUES (?, ?, ?)', staged)
 
         staged = [(ids_item[((t['item_id'],),)], ids_keyword[((t['keyword_id'],),)]) for t in taggings]
         staged = {t for t in staged if t not in identities['tagging']}
-        cursor.executemany(
-            'INSERT INTO tagging (item_id, keyword_id) VALUES (?, ?)', staged,
-        )
-        conn.commit()
+        bulk_op('INSERT INTO tagging (item_id, keyword_id) VALUES (?, ?)', staged)
 
         conn.close()
 
 
-class SQLFormatSpiderMiddleware:
+class SQLExporterSpiderMiddleware:
     def process_spider_output(self, response, result, spider):
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
@@ -449,3 +443,89 @@ class SQLFormatSpiderMiddleware:
 
             for t, m in item.markup.items():
                 yield {'__': 'markup', 'item_id': item.id_hash, 'type': t, 'markup': m}
+
+
+class PersistenceSpiderMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        instance = cls()
+        crawler.signals.connect(instance._close, spider_closed)
+        return instance
+
+    def __init__(self):
+        self.crawling = {}
+        self.finished = {}
+        self.fcrawling = None
+        self.ffinished = None
+
+    def init(self, spider):
+        fcrawling_path = spider.config['OUTPUT'].joinpath('crawling.json')
+        ffinished_path = spider.config['OUTPUT'].joinpath('finished.txt')
+        self.fcrawling = open(fcrawling_path, 'a+')
+        self.ffinished = open(ffinished_path, 'a+')
+        self.fcrawling.seek(0)
+        self.ffinished.seek(0)
+        try:
+            self.crawling = json.load(self.fcrawling)
+        except json.JSONDecodeError:
+            pass
+        self.finished = {u: True for u in self.ffinished.read().split('\n')}
+
+    def process_spider_output(self, response, result, spider):
+        if not self.fcrawling:
+            self.init(spider)
+
+        for r in result:
+            if isinstance(r, Request):
+                feed_url = r.meta.get('feed_url')
+                if feed_url in self.finished:
+                    spider.logger.info(f'Skipping finished feed {feed_url}')
+                    continue
+            if isinstance(r, Request) or '_persist' not in r:
+                yield r
+                continue
+            t = r['_persist']
+            r = r['request']
+            if t == 'crawling':
+                self.update_crawling(r)
+            else:
+                self.update_finished(r)
+
+    def process_start_requests(self, start_requests, spider: FeedlyRSSSpider):
+        if not self.fcrawling:
+            self.init(spider)
+        if not self.crawling:
+            yield from start_requests
+        else:
+            spider.logger.info(f'Resuming {len(self.crawling)} feed(s)')
+            reqs = [
+                spider.start_feed(url, derive=False, meta={**meta, 'inc_depth': True})
+                for url, meta in self.crawling.items()
+            ]
+            for r in reqs:
+                yield from r
+
+    def update_crawling(self, request):
+        feed_url = request.meta['feed_url']
+        len_ = len(self.crawling)
+        self.crawling[feed_url] = request.meta
+        if len_ != len(self.crawling):
+            self._write()
+
+    def update_finished(self, request):
+        feed_url = request.meta['feed_url']
+        len_ = len(self.crawling)
+        self.crawling.pop(feed_url, None)
+        if len_ != len(self.crawling):
+            self.ffinished.write(feed_url + '\n')
+            self._write()
+
+    def _write(self):
+        self.fcrawling.truncate(0)
+        self.fcrawling.seek(0)
+        json.dump(self.crawling, self.fcrawling, default=lambda _: None)
+
+    def _close(self, spider):
+        self._write()
+        self.fcrawling.close()
+        self.ffinished.close()
