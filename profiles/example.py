@@ -6,9 +6,6 @@ from scrapy import Request, Spider
 # Path where crawled data will be saved
 OUTPUT = f'./{datetime.now().strftime("%Y%m%d%H%M%S")}.crawl.json'
 
-# If True, Scrapy will overwrite OUTPUT if it already exists; if False, Scrapy will raise an Exception instead.
-OVERWRITE = False
-
 # The URL to the RSS feed (usually specified on the command line)
 FEED = 'https://xkcd.com/atom.xml'
 
