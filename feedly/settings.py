@@ -60,6 +60,7 @@ HTTPERROR_ALLOWED_CODES = [403, 404]
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
     'feedly.middlewares.RequestFilterDownloaderMiddleware': 100,
+    'feedly.middlewares.FeedlyScanDownloaderMiddleware': 110,
     'feedly.middlewares.HTTPErrorDownloaderMiddleware': 500,
     'feedly.middlewares.AuthorizationDownloaderMiddleware': 600,
 }

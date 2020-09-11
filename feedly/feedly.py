@@ -109,7 +109,7 @@ class FeedlyEntry:
         if source:
             return {
                 'feed': get_feed_uri(source.get('streamId', '/')),
-                'title': source.get('title'),
+                'title': source.get('title', ''),
                 'homepage': source.get('htmlUrl'),
             }
 
