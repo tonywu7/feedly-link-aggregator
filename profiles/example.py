@@ -21,7 +21,7 @@ DOWNLOAD_PER_BATCH = 1000
 # It is recommended that you disable search when using the network spider, because it could generate
 # a large number of search requests, and Feedly's Search API is a lot more sensitive to
 # high volume requests than its Streams API. You may quickly run into rate-limiting issues.
-FUZZY_SEARCH = False
+ENABLE_SEARCH = False
 
 # If you have Feedly's developer access token, you can provide it here.
 ACCESS_TOKEN = None
@@ -29,7 +29,7 @@ ACCESS_TOKEN = None
 # Network spider related option.
 # Value should be a set of domains.
 # Only nodes whose domain or parent domain is included here will be expanded upon
-# (they still get recorded, but will not be used to find new feeds).
+# (other nodes still get recorded, but will not be used to find new feeds).
 # If set to None, spider will not filter nodes based on domains.
 ALLOWED_DOMAINS = None
 # Network spider related option.

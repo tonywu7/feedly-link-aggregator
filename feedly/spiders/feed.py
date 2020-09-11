@@ -22,11 +22,11 @@
 
 from __future__ import annotations
 
-from .rss_spider import FeedlyRSSSpider
+from .base import FeedlyRSSSpider
 
 
-class SingleFeedSpider(FeedlyRSSSpider):
-    name = 'single_feed'
+class FeedSpider(FeedlyRSSSpider):
+    name = 'feed'
 
     def start_requests(self):
         return super().start_requests()
