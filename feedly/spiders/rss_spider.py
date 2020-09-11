@@ -31,33 +31,21 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from pprint import pformat
-from typing import List
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 import simplejson as json
 from scrapy import Spider
-from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened, spider_closed
-from scrapy_promise import Promise, fetch
-from twisted.python.failure import Failure
 
 from .. import feedly, utils
 from ..config import Config
-from ..exceptions import FeedExhausted
 from ..feedly import FeedlyEntry
 from ..sql import SCHEMA_VERSION
 from ..sql import utils as db_utils
 from ..utils import JSONDict
 
 log = logging.getLogger('feedly.spiders')
-
-
-def _guard_json(text: str) -> JSONDict:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        log.error(e)
 
 
 class FeedlyRSSSpider(Spider, ABC):
@@ -128,65 +116,39 @@ class FeedlyRSSSpider(Spider, ABC):
 
     @abstractmethod
     def start_requests(self):
-        query = self.config['FEED']
-        return self.start_feed(query, meta={'reason': 'user_specified', 'depth': 1})
+        return [self.locate_feed_url(self.config['FEED'], meta={'reason': 'user_specified', 'depth': 1})]
 
     def get_streams_url(self, feed_id, **params):
-        return feedly.build_api_url('streams', streamId=feed_id, **self.api_base_params, **params)
+        params = {**self.api_base_params, **params}
+        return feedly.build_api_url('streams', streamId=feed_id, **params)
 
-    def start_feed(self, query, derive=True, **kwargs):
-        prefix = self.config['STREAM_ID_PREFIX']
+    def locate_feed_url(self, query, derive=True, **kwargs):
         if derive:
-            url_templates = self.config['FEED_TEMPLATES']
-            effective_templates = {k: v for k, v in url_templates.items() if k.match(query)}
-            query_parsed = urlsplit(query)
-            specifiers = {
-                **query_parsed._asdict(),
-                'network_path': utils.no_scheme(query_parsed),
-                'path_query': utils.path_only(query_parsed),
-                'original': query_parsed.geturl(),
-            }
-            urls = {t % specifiers: None for _, t in sorted(
+            templates = self.config['FEED_TEMPLATES']
+            templates = {k: v for k, v in templates.items() if k.match(query)}
+            templates = [t[1] for t in sorted(
                 (priority, tmpl)
-                for pattern, tmpls in effective_templates.items()
+                for pattern, tmpls in templates.items()
                 for tmpl, priority in tmpls.items()
-            )}
+            )]
+            urls = utils.build_urls(query, templates)
         else:
             urls = [query]
 
-        meta = kwargs.pop('meta', {})
-        meta = {**meta, 'inc_depth': True}
+        meta = kwargs.pop('meta')
+        meta.update({'try_feeds': urls, 'search_query': query})
+        return Request(query, callback=self.start_feeds, meta=meta, **kwargs)
 
-        token = self.config.get('ACCESS_TOKEN')
-        if token:
-            meta['auth'] = token
+    def start_feeds(self, response):
+        meta = response.meta
+        feeds = meta['valid_feeds']
+        if not feeds:
+            if meta['reason'] == 'user_specified':
+                self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
+                self.logger.critical('No feed to crawl!')
 
-        starting_pages = [self.next_page({'id': f'{prefix}{u}'},
-                                         meta={**meta, 'query': query},
-                                         initial=True, **kwargs)
-                          for u in urls]
-        return Promise.all(*starting_pages)
-
-    def start_search(self, query, **kwargs):
-        def search(responses: List[TextResponse]):
-            empty_feeds = [p['empty_feed'] for p in responses if 'empty_feed' in p]
-            if len(empty_feeds) != len(responses):
-                return
-            self.logger.info(f'No valid RSS feed can be found using `{query}` and available feed templates.')
-
-            if self.config.getbool('FUZZY_SEARCH'):
-                self.logger.info(f'Searching Feedly for {query}')
-                meta = {**empty_feeds[0].meta}
-                meta.update(kwargs.pop('meta', {}))
-                meta['reason'] = 'search'
-
-                return fetch(
-                    feedly.build_api_url('search', query=query),
-                    priority=-1,
-                    meta=meta,
-                    **kwargs,
-                ).then(self.parse_search_result)
-        return search
+        for feed in feeds:
+            yield self.next_page({'id': feed}, meta=meta, initial=True)
 
     def next_page(self, data, response: TextResponse = None, initial=False, **kwargs):
         feed = data['id']
@@ -207,8 +169,8 @@ class FeedlyRSSSpider(Spider, ABC):
         if cont:
             params['continuation'] = cont
             meta['reason'] = 'continuation'
-        elif not initial:
-            raise FeedExhausted(response)
+        elif not initial and meta['reason'] != 'user_specified':
+            return {'_persist': 'finished', 'request': response.request}
 
         depth = meta.get('depth')
         reason = meta.get('reason')
@@ -216,17 +178,15 @@ class FeedlyRSSSpider(Spider, ABC):
 
         url = self.get_streams_url(feed, **params)
         if response:
-            request = fetch(url, base=response.request, meta=meta, **kwargs)
+            return response.request.replace(url=url, meta=meta, **kwargs)
         else:
-            request = fetch(url, meta=meta, **kwargs)
-
-        return request.then(self.parse_feed).catch(self.close_feed)
+            return Request(url, callback=self.parse_feed, meta=meta, **kwargs)
 
     def parse_feed(self, response: TextResponse):
         if not response:
             return
 
-        data = _guard_json(response.text)
+        data = utils.guard_json(response.text)
         items = data.get('items')
         source = response.meta['feed_url']
         if items:
@@ -255,34 +215,7 @@ class FeedlyRSSSpider(Spider, ABC):
             }
             yield {'_persist': 'crawling', 'request': response.request}
 
-        return self.next_page(data, response=response)
-
-    def close_feed(self, exc: FeedExhausted):
-        if isinstance(exc, Failure):
-            if isinstance(exc.value, IgnoreRequest):
-                return {}
-        if isinstance(exc, FeedExhausted):
-            response = exc.response
-            yield {'_persist': 'finished', 'request': response.request}
-            if response and response.meta.get('valid_feed'):
-                return {}
-            self.logger.debug(f'Empty feed {response.meta.get("feed_url")}')
-            return {'empty_feed': response}
-        raise exc
-
-    def log_exception(self, exc: Failure):
-        if isinstance(exc, Failure):
-            exc = exc.value
-        self.logger.error(exc, exc_info=True)
-
-    def parse_search_result(self, response: TextResponse):
-        if not response:
-            return
-
-        res = _guard_json(response.text)
-        if not res.get('results'):
-            return response, []
-        return response, [feed['feedId'] for feed in res['results']]
+        yield self.next_page(data, response=response)
 
     def digest_feed_export(self, stream):
         self.logger.info('Digesting crawled data, this may take a while...')
@@ -408,13 +341,30 @@ class FeedlyRSSSpider(Spider, ABC):
 
 
 class SQLExporterSpiderMiddleware:
+    def __init__(self):
+        self.crawled_items = set()
+        self.initialized = False
+
+    def init(self, spider):
+        path = spider.config['OUTPUT'].joinpath('crawled_items.txt')
+        if path.exists():
+            with open(path, 'r') as f:
+                self.crawled_items |= set(f.read().split('\n'))
+        self.initialized = True
+
     def process_spider_output(self, response, result, spider):
+        if not self.initialized:
+            self.init(spider)
+
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
                 yield data
                 continue
             item: FeedlyEntry = data['item']
             urls: utils.HyperlinkStore = data['urls']
+
+            if item.id_hash in self.crawled_items:
+                continue
 
             yield {
                 '__': 'item',
@@ -499,33 +449,38 @@ class PersistenceSpiderMiddleware:
         else:
             spider.logger.info(f'Resuming {len(self.crawling)} feed(s)')
             reqs = [
-                spider.start_feed(url, derive=False, meta={**meta, 'inc_depth': True})
+                spider.locate_feed_url(url, derive=False, meta={**meta, 'inc_depth': True})
                 for url, meta in self.crawling.items()
             ]
             for r in reqs:
-                yield from r
+                yield r
 
     def update_crawling(self, request):
         feed_url = request.meta['feed_url']
         len_ = len(self.crawling)
         self.crawling[feed_url] = request.meta
         if len_ != len(self.crawling):
-            self._write()
+            self._dump_crawling()
 
     def update_finished(self, request):
         feed_url = request.meta['feed_url']
         len_ = len(self.crawling)
         self.crawling.pop(feed_url, None)
         if len_ != len(self.crawling):
-            self.ffinished.write(feed_url + '\n')
-            self._write()
+            self._append_finished(feed_url)
+            self._dump_crawling()
 
-    def _write(self):
+    def _append_finished(self, url):
+        self.ffinished.write(url + '\n')
+        self.ffinished.flush()
+
+    def _dump_crawling(self):
         self.fcrawling.truncate(0)
         self.fcrawling.seek(0)
         json.dump(self.crawling, self.fcrawling, default=lambda _: None)
+        self.fcrawling.flush()
 
     def _close(self, spider):
-        self._write()
+        self._dump_crawling()
         self.fcrawling.close()
         self.ffinished.close()

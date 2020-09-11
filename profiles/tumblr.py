@@ -20,7 +20,7 @@ ignored_tumblrs = {
 
 
 def filter_tumblr(request, spider):
-    feed_url = request.meta.get('feed_url')
+    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
     if not feed_url:
         return True
     domain = urlsplit(feed_url).netloc

@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import MutableMapping, MutableSequence, MutableSet
 from datetime import datetime, timezone
@@ -36,6 +37,8 @@ from .datastructures import KeywordCollection, KeywordStore
 
 JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONType']]
 JSONDict = Dict[str, JSONType]
+
+log = logging.getLogger('feedly.utils')
 
 
 def parse_html(domstring, url='about:blank') -> TextResponse:
@@ -116,6 +119,25 @@ def wait(t):
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < t:
         time.sleep(0.1)
+
+
+def guard_json(text: str) -> JSONDict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        log.error(e)
+        return {}
+
+
+def build_urls(base, templates):
+    parsed = urlsplit(base)
+    specifiers = {
+        **parsed._asdict(),
+        'network_path': no_scheme(parsed),
+        'path_query': path_only(parsed),
+        'original': parsed.geturl(),
+    }
+    return [t % specifiers for t in templates]
 
 
 def compose_mappings(*mappings):

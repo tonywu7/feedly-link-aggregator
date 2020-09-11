@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import List, Union
+from typing import List
 from urllib.parse import urlsplit
 
 import igraph
@@ -69,12 +69,7 @@ class SiteNetworkSpider(FeedlyRSSSpider):
         ])
 
     def start_requests(self):
-        return (
-            super().start_requests()
-            .then(self.start_search(self.config['FEED']))
-            .then(self.crawl_search_result)
-            .catch(self.log_exception)
-        )
+        return super().start_requests()
 
     def crawl_search_result(self, _):
         if _ is None:
@@ -136,16 +131,19 @@ class ExplorationSpiderMiddleware:
         self.stats = crawler.stats
         self._discovered = set()
 
-    def process_spider_output(self, response: TextResponse, result: List[Union[FeedlyEntry, Request]], spider: SiteNetworkSpider):
+    def process_spider_output(self, response: TextResponse, result, spider: SiteNetworkSpider):
         depth = response.meta.get('depth', 0)
         for data in result:
-            if isinstance(data, Request) or 'item' not in data:
+            if isinstance(data, Request):
                 yield data
                 continue
-            item = data['item']
-            store = data['urls']
-            self.stats.inc_value('rss/page_count')
-            yield from self.process_item(response, item, store, depth, spider)
+            if 'item' in data:
+                item = data['item']
+                store = data['urls']
+                self.stats.inc_value('rss/page_count')
+                yield from self.process_item(response, item, store, depth, spider)
+            if data.get('_persist') == 'finished':
+                self.update_finished()
             yield data
 
     def process_item(
@@ -163,37 +161,13 @@ class ExplorationSpiderMiddleware:
 
         for url in sites:
             spider.logger.debug(f'{url} (depth={depth})')
-
-            # def set_priority(r: TextResponse):
-            #     if r.status >= 400:
-            #         return response.request.priority + 100
-            #     else:
-            #         return response.request.priority - 100
-
-            # def default_priority(failure):
-            #     return 0
-
-            def start_crawl(priority):
-                return spider.start_feed(
-                    url, priority=priority, response=response,
-                    meta={
-                        'inc_depth': True,
-                        'depth': depth,
-                        'reason': 'newly_discovered',
-                        'source_item': item,
-                    },
-                )
-
-            yield from (  # noqa: ECE001
-                # fetch(url, method='HEAD', meta={'inc_depth': True, 'depth': depth})
-                # .then(set_priority, default_priority)
-                # .then(start_crawl)
-                start_crawl(0)
-                .then(spider.start_search(url))
-                .then(spider.crawl_search_result)
-                .catch(spider.log_exception)
-                .finally_(self.update_finished)
-            )
+            yield spider.locate_feed_url(
+                url, meta={
+                    'inc_depth': True,
+                    'depth': depth,
+                    'reason': 'newly_discovered',
+                    'source_item': item,
+                })
 
         self.stats.set_value('network/1_discovered_nodes', len(self._discovered))
         depth_limit = spider.config.getint('DEPTH_LIMIT')

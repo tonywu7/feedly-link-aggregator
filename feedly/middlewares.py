@@ -29,6 +29,10 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
+from twisted.internet.defer import DeferredList
+
+from . import feedly
+from .utils import guard_json
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
@@ -60,10 +64,48 @@ def filter_depth(request: Request, spider: Spider):
 
 def filter_domains(request: Request, spider: Spider):
     domains = spider.config['ALLOWED_DOMAINS']
-    feed_url = request.meta.get('feed_url')
+    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
     if not feed_url or domains is None:
         return True
     return url_is_from_any_domain(feed_url, domains)
+
+
+class FeedlyScanDownloaderMiddleware:
+    async def process_request(self, request: Request, spider):
+        meta = request.meta
+        if 'try_feeds' not in meta:
+            return
+
+        prefix = spider.config['STREAM_ID_PREFIX']
+        feeds = meta['try_feeds']
+        query = meta['search_query']
+        valid_feeds = []
+
+        scans = []
+        for feed_url in feeds:
+            feed_id = f'{prefix}{feed_url}'
+            url = spider.get_streams_url(feed_id, count=20)
+            scans.append(spider.crawler.engine.download(Request(url, meta={'feed': feed_id}), spider))
+        results = await DeferredList(scans)
+
+        for successful, response in results:
+            if not successful:
+                continue
+            data = guard_json(response.text)
+            if data.get('items'):
+                valid_feeds.append(response.meta['feed'])
+
+        if not valid_feeds and spider.config.getbool('FUZZY_SEARCH'):
+            response = await spider.crawler.engine.download(Request(feedly.build_api_url('search', query=query)))
+            data = guard_json(response.text)
+            if data.get('results'):
+                valid_feeds.extend(feed['feedId'] for feed in data['results'])
+
+        meta['valid_feeds'] = valid_feeds
+        del meta['try_feeds']
+        if meta.get('inc_depth'):
+            meta['depth'] -= 1
+        return Response(url=request.url, request=request)
 
 
 class RequestFilterDownloaderMiddleware:
@@ -136,7 +178,15 @@ class HTTPErrorDownloaderMiddleware:
                 self.log.warn(f'Retry-After = {retry_after}s')
                 self.log.warn(f'Scrapy will now pause for {retry_after}s')
                 spider.crawler.engine.pause()
-                time.sleep(retry_after * 1.2)
+                to_sleep = retry_after * 1.2
+                slept = 0
+                while slept < to_sleep:
+                    try:
+                        time.sleep(0.1)
+                        slept += 0.1
+                    except KeyboardInterrupt:
+                        self.crawler.engine.unpause()
+                        raise
                 spider.crawler.engine.unpause()
                 self.log.info('Resuming crawl.')
                 return request.copy()
