@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import cProfile
+import gzip
 import logging
 from logging.config import dictConfig
 
@@ -28,7 +29,7 @@ import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
 from .logger import make_logging_config
-from .utils import json_converters
+from .utils import json_converters, watch_for_timing
 
 log = logging.getLogger('feedly.pipeline')
 
@@ -66,14 +67,17 @@ class CProfile:
 class FeedlyEntryExportPipeline:
     def open_spider(self, spider):
         self.output_dir = spider.config['OUTPUT']
-        self.stream = open(self.output_dir.joinpath('stream.jsonl'), 'a+', 65536)
+        self.stream = gzip.open(self.output_dir.joinpath('stream.jsonl.gz'), 'at', encoding='utf8')
+        self.init_exporter()
+
+    def init_exporter(self):
         self.exporter = SimpleJSONLinesExporter(self.stream)
         self.exporter.start_exporting()
 
     def close_spider(self, spider):
         self.exporter.finish_exporting()
-        self.stream.flush()
-        self.stream.seek(0)
+        self.stream.close()
+        self.stream = gzip.open(self.stream.name, 'rt', encoding='utf8')
         spider.digest_feed_export(self.stream)
         self.stream.close()
 
@@ -92,4 +96,5 @@ class SimpleJSONLinesExporter(JsonLinesItemExporter):
 
     def export_item(self, item):
         serialized = self.encoder.encode(item) + '\n'
-        self.file.write(serialized)
+        with watch_for_timing('Writing to stream', 0.01):
+            self.file.write(serialized)

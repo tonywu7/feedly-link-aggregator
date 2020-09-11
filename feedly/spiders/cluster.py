@@ -30,17 +30,15 @@ from scrapy.http import Request, TextResponse
 from .. import utils
 from ..feedly import FeedlyEntry
 from ..utils import JSONDict
-from .rss_spider import FeedlyRSSSpider
+from .base import FeedlyRSSSpider
 
 
-class SiteNetworkSpider(FeedlyRSSSpider):
-    name = 'feed_network'
+class FeedClusterSpider(FeedlyRSSSpider):
+    name = 'cluster'
 
     custom_settings = utils.compose_mappings(FeedlyRSSSpider.custom_settings, {
         'SPIDER_MIDDLEWARES': {
-            'feedly.spiders.single_feed.FeedResourceMiddleware': None,
-            'feedly.spiders.single_feed.FeedEntryMiddleware': None,
-            'feedly.spiders.feed_network.ExplorationSpiderMiddleware': 900,
+            'feedly.spiders.cluster.ExplorationSpiderMiddleware': 900,
         },
     })
 
@@ -62,10 +60,10 @@ class SiteNetworkSpider(FeedlyRSSSpider):
 
         self.logstats_items.extend([
             'rss/hyperlink_count',
-            'network/1_discovered_nodes',
-            'network/2_scheduled_nodes',
-            'network/3_finished_nodes',
-            'network/4_explored',
+            'cluster/1_discovered_nodes',
+            'cluster/2_scheduled_nodes',
+            'cluster/3_finished_nodes',
+            'cluster/4_explored',
         ])
 
     def start_requests(self):
@@ -131,7 +129,7 @@ class ExplorationSpiderMiddleware:
         self.stats = crawler.stats
         self._discovered = set()
 
-    def process_spider_output(self, response: TextResponse, result, spider: SiteNetworkSpider):
+    def process_spider_output(self, response: TextResponse, result, spider: FeedClusterSpider):
         depth = response.meta.get('depth', 0)
         for data in result:
             if isinstance(data, Request):
@@ -149,7 +147,7 @@ class ExplorationSpiderMiddleware:
     def process_item(
         self, response: TextResponse,
         item: FeedlyEntry, store: utils.HyperlinkStore, depth: int,
-        spider: SiteNetworkSpider,
+        spider: FeedClusterSpider,
     ):
         dest = {urlsplit(k): v for k, v in store.items()}
         dest = {k: v for k, v in dest.items() if k.netloc}
@@ -169,22 +167,22 @@ class ExplorationSpiderMiddleware:
                     'source_item': item,
                 })
 
-        self.stats.set_value('network/1_discovered_nodes', len(self._discovered))
+        self.stats.set_value('cluster/1_discovered_nodes', len(self._discovered))
         depth_limit = spider.config.getint('DEPTH_LIMIT')
         if depth_limit and depth < depth_limit or not depth_limit:
-            self.stats.inc_value('network/2_scheduled_nodes', len(sites))
+            self.stats.inc_value('cluster/2_scheduled_nodes', len(sites))
         self.update_ratio()
 
     def update_finished(self):
-        finished = self.stats.get_value('network/3_finished_nodes', 0)
+        finished = self.stats.get_value('cluster/3_finished_nodes', 0)
         finished += 1
-        self.stats.set_value('network/3_finished_nodes', finished)
+        self.stats.set_value('cluster/3_finished_nodes', finished)
         self.update_ratio()
 
     def update_ratio(self):
-        finished = self.stats.get_value('network/3_finished_nodes', 0)
-        scheduled = self.stats.get_value('network/2_scheduled_nodes', 1)
+        finished = self.stats.get_value('cluster/3_finished_nodes', 0)
+        scheduled = self.stats.get_value('cluster/2_scheduled_nodes', 1)
         if not scheduled:
             return
         ratio = finished / scheduled
-        self.stats.set_value('network/4_explored', f'{ratio * 100:.2f}%')
+        self.stats.set_value('cluster/4_explored', f'{ratio * 100:.2f}%')

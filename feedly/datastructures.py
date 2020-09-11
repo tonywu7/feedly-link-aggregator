@@ -22,8 +22,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable
-from collections.abc import Set as SetCollection
+from collections.abc import Hashable, Set as SetCollection
 from typing import Dict, Set, Tuple
 
 Keywords = Set[Hashable]

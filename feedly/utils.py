@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import MutableMapping, MutableSequence, MutableSet
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha1
 from typing import Any, Dict, List, Tuple, Union
@@ -61,6 +62,19 @@ def ensure_protocol(u, protocol='http'):
     return u if s.scheme else f'{protocol}:{u}'
 
 
+def domain_parents(domain: str) -> Tuple[str]:
+    parts = domain.split('.')
+    return tuple('.'.join(parts[-i:]) for i in range(len(parts), 1, -1))
+
+
+def no_scheme(url: SplitResult) -> str:
+    return url.geturl()[len(f'{url.scheme}:'):]
+
+
+def path_only(url: SplitResult) -> str:
+    return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
+
+
 def json_converters(value: Any) -> JSONType:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -90,25 +104,12 @@ def sha1sum(s: Union[str, bytes]) -> str:
     return sha1(s).hexdigest()
 
 
-def domain_parents(domain: str) -> Tuple[str]:
-    parts = domain.split('.')
-    return tuple('.'.join(parts[-i:]) for i in range(len(parts), 1, -1))
-
-
 def ensure_collection(supplier):
     def converter(obj):
         if obj is None:
             return supplier()
         return supplier(obj)
     return converter
-
-
-def no_scheme(url: SplitResult) -> str:
-    return url.geturl()[len(f'{url.scheme}:'):]
-
-
-def path_only(url: SplitResult) -> str:
-    return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
 
 
 def falsy(v):
@@ -119,6 +120,17 @@ def wait(t):
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < t:
         time.sleep(0.1)
+
+
+@contextmanager
+def watch_for_timing(name, limit):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        duration = time.perf_counter() - start
+        if duration > limit:
+            logging.getLogger('profiler.timing').warn(f'[Timing violation] {name} took {duration * 1000:.0f}ms; desired time is {limit * 1000:.0f}ms.')
 
 
 def guard_json(text: str) -> JSONDict:

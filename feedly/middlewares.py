@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 import logging
-import time
 from typing import Callable, List
 
 from scrapy import Spider
@@ -32,7 +31,7 @@ from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
 
 from . import feedly
-from .utils import guard_json
+from .utils import guard_json, wait
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
@@ -95,8 +94,8 @@ class FeedlyScanDownloaderMiddleware:
             if data.get('items'):
                 valid_feeds.append(response.meta['feed'])
 
-        if not valid_feeds and spider.config.getbool('FUZZY_SEARCH'):
-            response = await spider.crawler.engine.download(Request(feedly.build_api_url('search', query=query)))
+        if not valid_feeds and spider.config.getbool('ENABLE_SEARCH'):
+            response = await spider.crawler.engine.download(Request(feedly.build_api_url('search', query=query)), spider)
             data = guard_json(response.text)
             if data.get('results'):
                 valid_feeds.extend(feed['feedId'] for feed in data['results'])
@@ -179,14 +178,11 @@ class HTTPErrorDownloaderMiddleware:
                 self.log.warn(f'Scrapy will now pause for {retry_after}s')
                 spider.crawler.engine.pause()
                 to_sleep = retry_after * 1.2
-                slept = 0
-                while slept < to_sleep:
-                    try:
-                        time.sleep(0.1)
-                        slept += 0.1
-                    except KeyboardInterrupt:
-                        self.crawler.engine.unpause()
-                        raise
+                try:
+                    wait(to_sleep)
+                except KeyboardInterrupt:
+                    self.crawler.engine.unpause()
+                    raise
                 spider.crawler.engine.unpause()
                 self.log.info('Resuming crawl.')
                 return request.copy()

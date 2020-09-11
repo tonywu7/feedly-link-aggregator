@@ -36,13 +36,12 @@ from urllib.parse import unquote
 import simplejson as json
 from scrapy import Spider
 from scrapy.http import Request, TextResponse
-from scrapy.signals import spider_opened, spider_closed
+from scrapy.signals import spider_closed, spider_opened
 
 from .. import feedly, utils
 from ..config import Config
 from ..feedly import FeedlyEntry
-from ..sql import SCHEMA_VERSION
-from ..sql import utils as db_utils
+from ..sql import SCHEMA_VERSION, utils as db_utils
 from ..utils import JSONDict
 
 log = logging.getLogger('feedly.spiders')
@@ -54,8 +53,8 @@ class FeedlyRSSSpider(Spider, ABC):
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            'feedly.spiders.rss_spider.SQLExporterSpiderMiddleware': 200,
-            'feedly.spiders.rss_spider.PersistenceSpiderMiddleware': 300,
+            'feedly.spiders.base.SQLExporterSpiderMiddleware': 200,
+            'feedly.spiders.base.PersistenceSpiderMiddleware': 300,
         },
     }
 
@@ -70,7 +69,7 @@ class FeedlyRSSSpider(Spider, ABC):
         DOWNLOAD_ORDER = 'oldest'
         DOWNLOAD_PER_BATCH = 1000
 
-        FUZZY_SEARCH = False
+        ENABLE_SEARCH = False
         ACCESS_TOKEN = None
 
         STREAM_ID_PREFIX = 'feed/'
@@ -148,7 +147,9 @@ class FeedlyRSSSpider(Spider, ABC):
                 self.logger.critical('No feed to crawl!')
 
         for feed in feeds:
-            yield self.next_page({'id': feed}, meta=meta, initial=True)
+            request = self.next_page({'id': feed}, meta=meta, initial=True)
+            yield {'_persist': 'crawling', 'request': request}
+            yield request
 
     def next_page(self, data, response: TextResponse = None, initial=False, **kwargs):
         feed = data['id']
@@ -213,7 +214,6 @@ class FeedlyRSSSpider(Spider, ABC):
                 'depth': depth,
                 'time_crawled': time.time(),
             }
-            yield {'_persist': 'crawling', 'request': response.request}
 
         yield self.next_page(data, response=response)
 
@@ -239,7 +239,7 @@ class FeedlyRSSSpider(Spider, ABC):
             except sqlite3.OperationalError as e:
                 self.logger.error(e, exc_info=True)
                 self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
-                self.logger.error('Move the existing file somewhere else.')
+                self.logger.error('(Move the existing file somewhere else.)')
                 self.logger.error('(Unprocessed crawled data remain in `stream.jsonl`)')
                 raise
 
