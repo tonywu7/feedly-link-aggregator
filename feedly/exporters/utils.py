@@ -57,7 +57,8 @@ class MappingFilter:
 
 def with_db(exporter):
     @wraps(exporter)
-    def e(wd: Path, *args, **kwargs):
+    def e(wd, *args, **kwargs):
+        wd = Path(wd)
         output = wd.joinpath('out')
         os.makedirs(output, exist_ok=True)
 

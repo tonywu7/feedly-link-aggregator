@@ -133,3 +133,15 @@ def _select_pk(conn, table, config):
 
 def _select_auto(conn, table, config):
     return [t[0] for t in conn.execute(f'SELECT {config[AUTOINCREMENT][0]} FROM {table}').fetchall()]
+
+
+def bulk_fetch(cur, size=100000, log=None):
+    i = 0
+    rows = cur.fetchmany(size)
+    while rows:
+        for row in rows:
+            i += 1
+            yield row
+        if log:
+            log.info(f'Fetched {i} rows.')
+        rows = cur.fetchmany(size)

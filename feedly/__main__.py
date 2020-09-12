@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 from importlib import import_module
-from pathlib import Path
 
 import click
 from scrapy.crawler import CrawlerProcess
@@ -38,19 +37,19 @@ def cli():
 @cli.command()
 @click.argument('topic', required=True)
 @click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True))
-@click.option('-o', '--output', required=True)
+@click.option('-o', '--output', 'fmt')
 @click.option('+f', '--include', nargs=3, multiple=True, default=None)
 @click.option('-f', '--exclude', nargs=3, multiple=True, default=None)
 @click.argument('exporter-args', nargs=-1, type=click.UNPROCESSED)
-def export(topic, wd, include, exclude, output, exporter_args):
+def export(topic, exporter_args, **kwargs):
     options = dict([a.split('=', 1) for a in exporter_args])
-    wd = Path(wd)
     try:
         exporter = import_module(f'.{topic}', exporters.__name__)
         exporter.export
     except (AttributeError, ModuleNotFoundError):
         raise ValueError(f"No exporter found for topic '{topic}'")
-    exporter.export(wd, include, exclude, output, **options)
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+    exporter.export(**kwargs, **options)
 
 
 @cli.command()

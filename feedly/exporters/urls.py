@@ -20,38 +20,54 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from .exporters import MappingCSVExporter, MappingLineExporter
 from .utils import build_where_clause, with_db
+from ..sql.utils import bulk_fetch
 
 
 SELECT = """
+WITH urlsplits AS (
+    SELECT
+        url.id AS id,
+        url.url AS url,
+        %(urlexpansions)s
+    FROM
+        url
+)
 SELECT
-    feed.url AS "feed:url",
-    source.url AS "source:url",
-    target.url AS "target:url",
-    hyperlink.html_tag AS "html_tag",
-    %(urlexpansions)s
+    %(columns)s,
+    hyperlink.html_tag AS "html_tag"
 FROM
     hyperlink
-    JOIN url AS source ON source.id == hyperlink.source_id
-    JOIN url AS target ON target.id == hyperlink.target_id
+    JOIN urlsplits AS source ON source.id == hyperlink.source_id
+    JOIN urlsplits AS target ON target.id == hyperlink.target_id
     JOIN item ON hyperlink.source_id == item.url
-    JOIN url AS feed ON item.source == feed.id
+    JOIN urlsplits AS feed ON item.source == feed.id
 """
 expansions = []
-columns = ('feed', 'source', 'target')
-for column in columns:
-    for attr in ('scheme', 'netloc', 'path'):
-        expansions.append(f'urlsplit({column}.url, "{attr}") AS "{column}:{attr}"')
+tables = ('feed', 'source', 'target')
+attrs = ['scheme', 'netloc', 'path']
+for attr in attrs:
+    expansions.append(f"""urlsplit(url.url, '{attr}') AS "{attr}" """)
+attrs.append('url')
+columns = []
+for table in tables:
+    for attr in attrs:
+        columns.append(f'{table}.{attr} AS "{table}:{attr}"')
 expansions = ', '.join(expansions)
-SELECT = SELECT % {'urlexpansions': expansions}
+columns = ', '.join(columns)
+SELECT = SELECT % {'urlexpansions': expansions, 'columns': columns}
 
 
 @with_db
-def export(conn: sqlite3.Connection, wd: Path, output: Path, include, exclude, fmt, key='target:url', format='lines'):
+def export(
+    conn: sqlite3.Connection, wd: Path, output: Path, fmt='urls.txt',
+    include=None, exclude=None, key='target:url', format='lines',
+):
     where, values = build_where_clause(include, exclude)
     select = f'{SELECT} WHERE {where}'
 
@@ -61,5 +77,5 @@ def export(conn: sqlite3.Connection, wd: Path, output: Path, include, exclude, f
     }[format]
 
     with cls(*args) as exporter:
-        for row in conn.execute(select, values):
+        for row in bulk_fetch(conn.execute(select, values), log=logging.getLogger('exporter')):
             exporter.write(row)
