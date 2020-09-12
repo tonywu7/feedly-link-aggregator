@@ -23,13 +23,10 @@
 from typing import List
 from urllib.parse import urlsplit
 
-import igraph
-import simplejson as json
 from scrapy.http import Request, TextResponse
 
 from .. import utils
 from ..feedly import FeedlyEntry
-from ..utils import JSONDict
 from .base import FeedlyRSSSpider
 
 
@@ -77,47 +74,6 @@ class FeedClusterSpider(FeedlyRSSSpider):
             return
         feed = feed[0]
         yield from self.next_page({'id': feed}, response=response, initial=True)
-
-    def _digest(self, stream):
-        items = {}
-        resources = utils.HyperlinkStore()
-
-        vertices = {}
-        edges = {}
-
-        next_line = stream.readline()
-        while next_line:
-            data: JSONDict = json.loads(next_line.rstrip())
-            if '_graph' in data:
-                src = data['src']
-                metadata = data['metadata']
-                items[src] = metadata
-
-                vertices[src] = True
-                for dest, keywords in data['dests'].items():
-                    tag_name = keywords['tag'][0]
-                    depth = data['depth']
-                    time_crawled = data['time_crawled']
-                    vertices[dest] = True
-                    edges[(src, dest)] = (tag_name, depth, time_crawled)
-
-                    resources.put(
-                        dest, **{k: set(v) for k, v in keywords.items()},
-                        feedly_id={metadata['id_hash']},
-                        feedly_keyword=set(metadata['keywords']),
-                    )
-
-            next_line = stream.readline()
-
-        g = igraph.Graph(directed=True)
-        vertex_ids = {k: i for k, i in zip(vertices, range(len(vertices)))}
-        edges = {(vertex_ids[t[0]], vertex_ids[t[1]]): v for t, v in edges.items()}
-        g.add_vertices(len(vertices))
-        g.add_edges(edges)
-        g.vs['url'] = list(vertices)
-        g.es['type'], g.es['depth'], g.es['timestamp'] = tuple(zip(*edges.values()))
-
-        return g, items, resources
 
 
 class ExplorationSpiderMiddleware:
