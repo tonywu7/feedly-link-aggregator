@@ -28,9 +28,11 @@ import re
 import sqlite3
 import time
 from abc import ABC, abstractmethod
+from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from pprint import pformat
+from typing import List, Union
 from urllib.parse import unquote
 
 import simplejson as json
@@ -45,7 +47,8 @@ from ..feedly import FeedlyEntry
 from ..sql import SCHEMA_VERSION
 from ..sql import utils as db_utils
 from ..urlkit import build_urls, select_templates
-from ..utils import HyperlinkStore, JSONDict, guard_json
+from ..utils import (HyperlinkStore, JSONDict, SpiderOutput, guard_json,
+                     watch_for_timing)
 
 log = logging.getLogger('feedly.spiders')
 
@@ -84,7 +87,7 @@ class FeedlyRSSSpider(Spider, ABC):
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
 
-    def __init__(self, name=None, preset=None, **kwargs):
+    def __init__(self, name: str = None, preset: str = None, **kwargs):
         super().__init__(name=name, **kwargs)
 
         kwargs = {k.upper(): v for k, v in kwargs.items()}
@@ -120,11 +123,11 @@ class FeedlyRSSSpider(Spider, ABC):
     def start_requests(self):
         return [self.locate_feed_url(self.config['FEED'], meta={'reason': 'user_specified', 'depth': 1})]
 
-    def get_streams_url(self, feed_id, **params):
+    def get_streams_url(self, feed_id: str, **params) -> str:
         params = {**self.api_base_params, **params}
         return feedly.build_api_url('streams', streamId=feed_id, **params)
 
-    def locate_feed_url(self, query, derive=True, **kwargs):
+    def locate_feed_url(self, query: str, derive: bool = True, **kwargs) -> Request:
         templates = self.config['FEED_TEMPLATES']
         if derive and templates:
             try:
@@ -139,7 +142,7 @@ class FeedlyRSSSpider(Spider, ABC):
         meta.update({'try_feeds': urls, 'search_query': query})
         return Request(query, callback=self.start_feeds, meta=meta, **kwargs)
 
-    def start_feeds(self, response):
+    def start_feeds(self, response: TextResponse):
         meta = response.meta
         feeds = meta['valid_feeds']
         if not feeds:
@@ -152,7 +155,7 @@ class FeedlyRSSSpider(Spider, ABC):
             yield {'_persist': 'crawling', 'request': request}
             yield request
 
-    def next_page(self, data, response: TextResponse = None, initial=False, **kwargs):
+    def next_page(self, data: JSONDict, response: TextResponse = None, initial: bool = False, **kwargs) -> Union[JSONDict, Request]:
         feed = data['id']
 
         if response:
@@ -264,9 +267,16 @@ class FeedlyRSSSpider(Spider, ABC):
         taggings = []
 
         self.logger.info('Reading item stream...')
+        i = 0
         next_line = stream.readline()
         while next_line:
-            data: JSONDict = json.loads(next_line.rstrip())
+            i += 1
+            try:
+                data: JSONDict = json.loads(next_line.rstrip())
+            except json.JSONDecodeError as e:
+                self.logger.error(e)
+                self.logger.error(f'Corrupted data on line {i} in stream. Aborting!')
+                return
             rowtype = data.pop('__', '')
 
             if rowtype == 'url':
@@ -346,11 +356,11 @@ class FetchSourceSpiderMiddleware:
         self.logger = logging.getLogger('feedly.source')
         self.initialized = False
 
-    def init(self, spider):
+    def init(self, spider: FeedlyRSSSpider):
         self.scrape_source = spider.config.getbool('SCRAPE_SOURCE_PAGE', False)
         self.initialized = True
 
-    def process_spider_output(self, response, result, spider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
         if not self.initialized:
             self.init(spider)
         if not self.scrape_source:
@@ -397,14 +407,14 @@ class CrawledItemSpiderMiddleware:
         self.crawled_items = set()
         self.initialized = False
 
-    def init(self, spider):
+    def init(self, spider: FeedlyRSSSpider):
         path = spider.config['OUTPUT'].joinpath('crawled_items.txt')
         if path.exists():
             with open(path, 'r') as f:
                 self.crawled_items |= set(f.read().split('\n'))
         self.initialized = True
 
-    def process_spider_output(self, response, result, spider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
                 yield data
@@ -415,7 +425,7 @@ class CrawledItemSpiderMiddleware:
 
 
 class SQLExporterSpiderMiddleware:
-    def process_spider_output(self, response, result, spider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
                 yield data
@@ -466,8 +476,10 @@ class PersistenceSpiderMiddleware:
         self.fcrawling = None
         self.ffinished = None
         self.logger = logging.getLogger('feedly.persistence')
+        self.executor = ThreadPoolExecutor(1, 'persistence_flush')
+        self.fcrawlingfuture = None
 
-    def init(self, spider):
+    def init(self, spider: FeedlyRSSSpider):
         fcrawling_path = spider.config['OUTPUT'].joinpath('crawling.json')
         ffinished_path = spider.config['OUTPUT'].joinpath('finished.txt')
         self.fcrawling = open(fcrawling_path, 'a+')
@@ -480,7 +492,7 @@ class PersistenceSpiderMiddleware:
             pass
         self.finished = {u: True for u in self.ffinished.read().split('\n')}
 
-    def process_spider_output(self, response, result, spider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
         if not self.fcrawling:
             self.init(spider)
 
@@ -502,7 +514,7 @@ class PersistenceSpiderMiddleware:
             else:
                 self.update_finished(r)
 
-    def process_start_requests(self, start_requests, spider: FeedlyRSSSpider):
+    def process_start_requests(self, start_requests: List[Request], spider: FeedlyRSSSpider):
         if not self.fcrawling:
             self.init(spider)
         if not self.crawling:
@@ -516,14 +528,14 @@ class PersistenceSpiderMiddleware:
             for r in reqs:
                 yield r
 
-    def update_crawling(self, request):
+    def update_crawling(self, request: Request):
         feed_url = request.meta['feed_url']
         len_ = len(self.crawling)
         self.crawling[feed_url] = request.meta
         if len_ != len(self.crawling):
             self._dump_crawling()
 
-    def update_finished(self, request):
+    def update_finished(self, request: Request):
         feed_url = request.meta['feed_url']
         len_ = len(self.crawling)
         self.crawling.pop(feed_url, None)
@@ -531,7 +543,7 @@ class PersistenceSpiderMiddleware:
             self._append_finished(feed_url)
             self._dump_crawling()
 
-    def _append_finished(self, url):
+    def _append_finished(self, url: str):
         self.ffinished.write(url + '\n')
         self.ffinished.flush()
 
@@ -539,12 +551,17 @@ class PersistenceSpiderMiddleware:
         self.fcrawling.truncate(0)
         self.fcrawling.seek(0)
         json.dump(self.crawling, self.fcrawling, default=lambda _: None)
-        self.fcrawling.flush()
+        with watch_for_timing('Creating future', 0.05):
+            if self.fcrawlingfuture:
+                self.fcrawlingfuture.cancel()
+            self.fcrawlingfuture = self.executor.submit(self.fcrawling.flush)
 
-    def _close(self, spider, reason):
-        self._dump_crawling()
-        self.fcrawling.close()
-        self.ffinished.close()
+    def _close(self, spider: FeedlyRSSSpider, reason: str):
         if reason == 'finished':
             os.remove(self.fcrawling.name)
             os.remove(self.ffinished.name)
+            return
+        self._dump_crawling()
+        self.fcrawling.close()
+        self.ffinished.close()
+        self.executor.shutdown(True)

@@ -33,7 +33,7 @@ from .utils import with_db
 log = logging.getLogger('graph-exporter')
 
 
-def create_hyperlink_graph(db):
+def create_hyperlink_graph(db: sqlite3.Connection):
     SELECT = """
     SELECT
         source.url AS "source",
@@ -71,7 +71,7 @@ def create_hyperlink_graph(db):
     return g
 
 
-def create_domain_graph(db):
+def create_domain_graph(db: sqlite3.Connection):
     SELECT = """
     WITH domains AS (
         SELECT
@@ -192,7 +192,8 @@ _graphtype=[hyperlink|domain]_
             Each hyperlink found in _source_ pointing to _target_;
             **Attributes**
                 _type_: The HTML element
-                _timestamp_: UTC date and time when _source_ was published, in ISO-8601 format
+                _timestamp_: UTC date and time when _source_ was published,
+                  in ISO-8601 format
 
     **_domain_**
         **Directed, self-loop allowed**
@@ -202,9 +203,10 @@ _graphtype=[hyperlink|domain]_
                 _name_: Domain name
                 _weight_: The number of files found under the domain
         **Edges**
-            Each hyperlink found in _source_ pointing to _target_ creates an edge from
-            _source:domain_ to _target:domain_; not repeated.
+            Each hyperlink found in _source_ pointing to _target_ creates an
+              edge from _source:domain_ to _target:domain_; not repeated.
             **Attributes**
-                _<tag names...>_: Each hyperlink in _source_ pointing to _target_ that is
-                found on a particular HTML tag increases the _<tag>_ attribute by 1.
+                _<tag names...>_: Each hyperlink in _source_ pointing to
+                  _target_ that is found on a particular HTML tag increases
+                  the _<tag>_ attribute by 1.
 """

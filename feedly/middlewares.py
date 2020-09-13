@@ -36,7 +36,7 @@ from .utils import guard_json, wait
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
     def __init__(self, maxdepth, stats, verbose_stats=False, prio=1):
-        super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=0)
+        super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=prio)
 
     def process_spider_output(self, response, result, spider):
         if not self.maxdepth:

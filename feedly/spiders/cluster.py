@@ -28,7 +28,7 @@ from scrapy.http import Request, TextResponse
 
 from ..datastructures import compose_mappings
 from ..feedly import FeedlyEntry
-from ..utils import HyperlinkStore
+from ..utils import HyperlinkStore, SpiderOutput
 from .base import FeedlyRSSSpider
 
 
@@ -39,6 +39,9 @@ class FeedClusterSpider(FeedlyRSSSpider):
         'SPIDER_MIDDLEWARES': {
             'feedly.spiders.cluster.ExplorationSpiderMiddleware': 900,
         },
+        'DEPTH_PRIORITY': 1,
+        'SCHEDULER_DISK_QUEUE': 'scrapy.squeues.PickleFifoDiskQueue',
+        'SCHEDULER_MEMORY_QUEUE': 'scrapy.squeues.FifoMemoryQueue',
     })
 
     class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
@@ -63,19 +66,11 @@ class FeedClusterSpider(FeedlyRSSSpider):
             'cluster/2_scheduled_nodes',
             'cluster/3_finished_nodes',
             'cluster/4_explored',
+            'cluster/5_maxdepth',
         ])
 
     def start_requests(self):
         return super().start_requests()
-
-    def crawl_search_result(self, _):
-        if _ is None:
-            return
-        response, feed = _
-        if not feed or len(feed) > 1:
-            return
-        feed = feed[0]
-        yield from self.next_page({'id': feed}, response=response, initial=True)
 
 
 class ExplorationSpiderMiddleware:
@@ -87,9 +82,11 @@ class ExplorationSpiderMiddleware:
         self.stats = crawler.stats
         self.logger = logging.getLogger('feedly.explore')
         self._discovered = set()
+        self._finished = set()
 
-    def process_spider_output(self, response: TextResponse, result, spider: FeedClusterSpider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedClusterSpider):
         depth = response.meta.get('depth', 0)
+        self.stats.max_value('cluster/5_maxdepth', depth)
         for data in result:
             if isinstance(data, Request):
                 yield data
@@ -100,7 +97,7 @@ class ExplorationSpiderMiddleware:
                 self.stats.inc_value('rss/page_count')
                 yield from self.process_item(response, item, store, depth, spider)
             if data.get('_persist') == 'finished':
-                self.update_finished()
+                self.update_finished(data['request'])
             yield data
 
     def process_item(
@@ -132,10 +129,10 @@ class ExplorationSpiderMiddleware:
             self.stats.inc_value('cluster/2_scheduled_nodes', len(sites))
         self.update_ratio()
 
-    def update_finished(self):
-        finished = self.stats.get_value('cluster/3_finished_nodes', 0)
-        finished += 1
-        self.stats.set_value('cluster/3_finished_nodes', finished)
+    def update_finished(self, request: Request):
+        feed_url = request.meta['feed_url']
+        self._finished.add(urlsplit(feed_url).netloc)
+        self.stats.set_value('cluster/3_finished_nodes', len(self._finished))
         self.update_ratio()
 
     def update_ratio(self):

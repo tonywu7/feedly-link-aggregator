@@ -25,12 +25,15 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Callable, Set
 
 import simplejson as json
 
+from ..utils import JSONDict
+
 
 class MappingExporter(ABC):
-    def __init__(self, output, filename, escape=None):
+    def __init__(self, output: Path, filename: str, escape: Callable[[str], str] = None):
         self.output = output
         self.filename = filename
         self.ext = ''.join(Path(filename).suffixes)
@@ -39,10 +42,10 @@ class MappingExporter(ABC):
         self.logger = logging.getLogger('exporter')
 
     @abstractmethod
-    def format(self, item):
+    def format(self, item: JSONDict):
         return item
 
-    def get_file(self, item):
+    def get_file(self, item: JSONDict):
         filename = self.escape(self.filename % item)
         if filename[-1] == '/':
             filename = f'{filename}index{self.ext}'
@@ -54,7 +57,7 @@ class MappingExporter(ABC):
             self.logger.info(f'New file {path}')
         return out, path
 
-    def write(self, item):
+    def write(self, item: JSONDict):
         out, _ = self.get_file(item)
         out.write(f'{self.format(item)}\n')
 
@@ -81,15 +84,15 @@ class MappingExporter(ABC):
 
 
 class MappingJSONExporter(MappingExporter):
-    def __init__(self, key, *args, **kwargs):
+    def __init__(self, key: Set[str], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.key = key
         self.storage = {}
 
-    def format(self, item):
+    def format(self, item: JSONDict):
         return super().format(item)
 
-    def write(self, item):
+    def write(self, item: JSONDict):
         _, fn = self.get_file(item)
         s = self.storage.setdefault(fn, {})
         s[item[self.key]] = item
@@ -101,7 +104,7 @@ class MappingJSONExporter(MappingExporter):
 
 
 class MappingLineExporter(MappingExporter):
-    def __init__(self, key, *args, **kwargs):
+    def __init__(self, key: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.key = key
 
@@ -110,15 +113,15 @@ class MappingLineExporter(MappingExporter):
 
 
 class MappingCSVExporter(MappingExporter):
-    def __init__(self, fieldnames=None, *args, **kwargs):
+    def __init__(self, fieldnames: Set[str] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.writers = {}
         self.fieldnames = fieldnames
 
-    def format(self, item):
+    def format(self, item: JSONDict):
         return super().format(item)
 
-    def get_file(self, item):
+    def get_file(self, item: JSONDict):
         f, fn = super().get_file(item)
         if not self.fieldnames:
             self.fieldnames = tuple(item.keys())
@@ -128,5 +131,5 @@ class MappingCSVExporter(MappingExporter):
             writer.writeheader()
         return writer
 
-    def write(self, item):
+    def write(self, item: JSONDict):
         self.get_file(item).writerow({**item})

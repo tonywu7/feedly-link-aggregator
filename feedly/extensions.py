@@ -39,7 +39,8 @@ class LogStatsExtended(LogStats):
         super().spider_opened(spider)
 
     def log(self, spider):
-        values = {k: self.stats.get_value(k, 0) for k in self.items}
+        values = self.stats.get_stats()
+        values = {k: values.get(k, 0) for k in self.items}
 
         self.elapsed += 1
         if self.elapsed:
