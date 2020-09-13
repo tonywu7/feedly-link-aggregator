@@ -32,13 +32,14 @@ from typing import Any, Dict, List, Union
 from urllib.parse import urlsplit
 
 import simplejson as json
-from scrapy.http import TextResponse
+from scrapy.http import Request, TextResponse
 
 from .datastructures import KeywordCollection, KeywordStore
 from .urlkit import domain_parents, ensure_protocol, is_absolute_http
 
 JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONType']]
 JSONDict = Dict[str, JSONType]
+SpiderOutput = List[Union[JSONDict, Request]]
 
 log = logging.getLogger('feedly.utils')
 

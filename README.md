@@ -239,6 +239,9 @@ Cluster spider works best for sites that have predefined endpoints for RSS feeds
 
 ## Changelog
 
+- **v0.10.2**
+    - _Cluster spider algorithm:_ Cluster spider now do breadth-first crawls, meaning it will crawl feeds closer to the starting feed
+    to completion before crawling feeds that are further away.
 - **v0.10.1**
     - **![#f03c15](https://placehold.it/12/f06073/000000?text=+) This version introduces API-breaking changes.**
     - _Command change:_ The commands for both crawling and exporting has changed. See the following two sections for details.

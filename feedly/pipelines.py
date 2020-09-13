@@ -23,15 +23,15 @@
 import cProfile
 import gzip
 import logging
+import os
 from logging.config import dictConfig
+from pathlib import Path
 
 import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
 from .logger import make_logging_config
 from .utils import json_converters, watch_for_timing
-
-log = logging.getLogger('feedly.pipeline')
 
 
 class ConfigLogging:
@@ -66,8 +66,17 @@ class CProfile:
 
 class CompressedStreamExportPipeline:
     def open_spider(self, spider):
-        self.output_dir = spider.config['OUTPUT']
-        self.stream = gzip.open(self.output_dir.joinpath('stream.jsonl.gz'), 'at', encoding='utf8')
+        self.logger = logging.getLogger('feedly.gzstream')
+        self.output_dir: Path = spider.config['OUTPUT']
+        path = self.output_dir.joinpath('stream.jsonl.gz')
+        if path.exists():
+            i = 1
+            while self.output_dir.joinpath(f'stream.jsonl.gz.{i}').exists():
+                i += 1
+            path2 = self.output_dir.joinpath(f'stream.jsonl.gz.{i}')
+            self.logger.info(f'Renaming existing {path.name} to {path2.name}')
+            os.rename(path, path2)
+        self.stream = gzip.open(path, 'at', encoding='utf8')
         self.init_exporter()
 
     def init_exporter(self):

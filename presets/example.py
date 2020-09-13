@@ -59,10 +59,16 @@ DEPTH_LIMIT = 1
 # This option should be a mapping (a dict), where
 # the key should be a valid regular expression that matches the URLs you wish to apply the corresponding the templates,
 #
-# and the value should be another mapping,
+# and the value should be either another mapping,
 # where the key is a %-format string with named placeholders, which will be formatted into the final URL
 # and the value is a number that denotes the priority of the template: templates with a lower number are tried first (similar to how
-# Scrapy middlewares are ordered)
+# Scrapy middlewares are ordered),
+#
+# or it could also be a callable, in which case it is passed the matched URL as a `urlsplit` tuple, and the regex match
+# object, and it should return an iterable.
+#
+# Note that only the templates under the first matching pattern are used. Since dicts are ordered you should place
+# more specific patterns at the top of the mapping.
 #
 # Available placeholders are:
 # The components of a urllib.parse.urlsplit named tuple:
@@ -74,6 +80,9 @@ DEPTH_LIMIT = 1
 #   %(original)s        - The original string, unchanged
 #   %(network_path)s    - URL minus the protocol part, equivalent to `//%(netloc)s/%(path)s?%(query)s`
 #   %(path_query)s      - URL minus protocol and domain name, equivalent to `/%(path)s?%(query)s`
+# If you define capture groups in your pattern:
+#   %(key)s ...         - Named groups
+#   %(1)s, %(2)s        - Numbered groups
 FEED_TEMPLATES = {
     r'.*': {  # This regular expression will match any strings
         'http:%(network_path)s': 997,
@@ -102,8 +111,6 @@ def https_only(request: Request, spider: Spider):
 #       `continuation`      - Subsequent pages of a currently downloading feed
 #       `search`            - A Request to Feedly's Search API
 #   feed_url        - The final feed URL that will be sent to Feedly, this could be generated based on the URL templates defined above.
-#   feed_query      - A string, usually a URL, that describes a feed. This could be either the user-supplied URL, or in the
-#                     context of the network spider, domain names extracted from existing feeds that will be used to expand the network.
 #   source_item     - In the context of the network spider, if a potential new RSS feed is discovered and is about to be crawled,
 #                     this attribute will contain the FeedlyEntry object from which the new feed is found.
 #                     The object will contain useful information such as keywords and HTML markups.
@@ -114,22 +121,40 @@ REQUEST_FILTERS = {
 STREAM_ID_PREFIX = 'feed/'
 
 
-def keyword_prioritizer(request, spider):
-    item = request.meta.get('source_item')
-    if not item:
-        return True
-    weight = 0
-    kws = {k.lower() for k in item.keywords}
-    for w, keys in weighted_keywords.items():
-        for k in keys:
-            if k in kws or k in item.url:
-                weight += w
-    if not weight:
-        return True
-    return request.replace(priority=request.priority + weight)
+class KeywordPrioritizer:
+    def __init__(self):
+        self.priorities = {}
+        self.weighted_keywords = {
+            1: ['wanted'],
+            -1: ['unwanted'],
+        }
+        self.weighted_keywords = {k: p for p, kws in self.weighted_keywords.items() for k in kws}
+        self.starting_weight = -1
 
+    def update_priority(self, item):
+        site = urlsplit(item.url).netloc
+        prio = self.priorities.setdefault(site, self.starting_weight)
+        delta = 0
+        phrases = [k.lower() for k in item.keywords]
+        phrases.extend([item.markup.get('summary', ''), item.url, item.title.lower()])
+        for kw, p in self.weighted_keywords.items():
+            for s in phrases:
+                if kw in s:
+                    delta += p
+        self.priorities[site] = prio + delta
 
-weighted_keywords = {
-    -1: [],
-    1: [],
-}
+    def __call__(self, request, spider):
+        item = request.meta.get('source_item')
+        feed_url = request.meta.get('feed_url')
+        if not item or not feed_url:
+            return True
+        self.update_priority(item)
+        prio = self.priorities.get(urlsplit(feed_url).netloc)
+        if not prio:
+            return True
+        return request.replace(priority=request.priority + prio)
+
+    def __hash__(self):
+        if not self.weighted_keywords:
+            raise NotImplementedError
+        return hash((tuple(self.weighted_keywords.items())))
