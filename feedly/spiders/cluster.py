@@ -42,18 +42,18 @@ class FeedClusterSpider(FeedlyRSSSpider):
     class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
         OVERWRITE = True
 
-        ALLOWED_DOMAINS = None
+        FOLLOW_DOMAINS = None
         DEPTH_LIMIT = 1
 
     def __init__(self, name=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
-        domains = self.config['ALLOWED_DOMAINS']
+        domains = self.config['FOLLOW_DOMAINS']
         if isinstance(domains, str):
             domains = set(domains.split(' '))
         elif isinstance(domains, List):
             domains = set(domains)
-        self.config['ALLOWED_DOMAINS'] = domains
+        self.config['FOLLOW_DOMAINS'] = domains
 
         self.logstats_items.extend([
             'rss/hyperlink_count',

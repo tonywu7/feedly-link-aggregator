@@ -73,7 +73,8 @@ class FeedlyEntry:
     source: Dict[str, str] = attr.ib(factory=dict, repr=False)
 
     keywords: Keywords = attr.ib(converter=utils.ensure_collection(lowercase_set), factory=lowercase_set, repr=False)
-    author: Optional[str] = attr.ib(default=None, repr=False)
+    author: Optional[str] = attr.ib(default='', repr=False)
+    title: Optional[str] = attr.ib(default='', repr=False)
 
     markup: Dict[str, str] = attr.ib(factory=dict, repr=False)
 

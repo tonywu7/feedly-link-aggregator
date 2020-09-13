@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS item (
 	hash VARCHAR(40) NOT NULL, 
 	url INTEGER NOT NULL, 
 	source INTEGER NOT NULL, 
+	title VARCHAR, 
 	author VARCHAR, 
 	published DATETIME, 
 	updated DATETIME, 
@@ -74,7 +75,7 @@ CREATE TABLE IF NOT EXISTS markup (
 CREATE TABLE IF NOT EXISTS hyperlink (
 	source_id INTEGER NOT NULL, 
 	target_id INTEGER NOT NULL, 
-	html_tag VARCHAR NOT NULL, 
+	element VARCHAR NOT NULL, 
 	CONSTRAINT pk_hyperlink PRIMARY KEY (source_id, target_id), 
 	CONSTRAINT fk_hyperlink_source_id_url FOREIGN KEY(source_id) REFERENCES url (id), 
 	CONSTRAINT fk_hyperlink_target_id_url FOREIGN KEY(target_id) REFERENCES url (id)

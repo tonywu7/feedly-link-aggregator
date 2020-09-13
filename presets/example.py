@@ -3,10 +3,12 @@ from urllib.parse import urlsplit
 
 from scrapy import Request, Spider
 
-# Path where crawled data will be saved
-OUTPUT = f'./{datetime.now().strftime("%Y%m%d%H%M%S")}.crawl.json'
+# Path where scraped data will be saved; will be a directory
+# If an existing directory with scraped data is specified, newly gathered
+# data will be merged with existing one.
+OUTPUT = f'./{datetime.now().strftime("%Y%m%d%H%M%S")}'
 
-# The URL to the RSS feed (usually specified on the command line)
+# The URL to the RSS feed
 FEED = 'https://xkcd.com/atom.xml'
 
 # Which part of the feed to download first: either `oldest` or `newest`
@@ -18,45 +20,44 @@ DOWNLOAD_PER_BATCH = 1000
 # If enabled, when the feed URL you provided above does not yield any result from Feedly,
 # Scrapy will use Feedly's Search API to try to find the correct URL.
 #
-# It is recommended that you disable search when using the network spider, because it could generate
+# It is recommended that you disable search when using the cluster spider, because it could generate
 # a large number of search requests, and Feedly's Search API is a lot more sensitive to
-# high volume requests than its Streams API. You may quickly run into rate-limiting issues.
+# high volume requests than its Streams API, meaning you may quickly run into rate-limiting issues.
 ENABLE_SEARCH = False
 
-# If you have Feedly's developer access token, you can provide it here.
+# If you have a developer access token, you can provide it here.
 ACCESS_TOKEN = None
 
-# Network spider related option.
-# Value should be a set of domains.
-# Only nodes whose domain or parent domain is included here will be expanded upon
-# (other nodes still get recorded, but will not be used to find new feeds).
+# Cluster spider related option.
+# Value should be a collection of domains.
+# Only nodes whose domains or parent domains are included here will be expanded upon
+# (other nodes are still recorded, but are not used to find new feeds).
 # If set to None, spider will not filter nodes based on domains.
-ALLOWED_DOMAINS = None
-# Network spider related option.
+FOLLOW_DOMAINS = None
+# Cluster spider related option.
 # This is the same settings as the one used by the built-in DepthMiddleware.
 # Value should be an integer.
-# Nodes that are more `depth` degree removed from the starting feed will not be expanded upon.
-# If set to 0, only the starting feed will be crawled.
-# If set to None, spider will keep crawling further and further until manually stopped.
+# Nodes that are more `depth + 1` degree removed from the starting feed will not be expanded upon.
+# If set to 1, only the starting feed will be crawled.
+# If set to 0 or None, spider will keep crawling until manually stopped.
 DEPTH_LIMIT = 1
 
 # Templates to generate different versions of RSS URLs based on the value of the FEED setting.
 # Because Feedly sometimes store an RSS feed's source URL with slight variations (e.g. using HTTP instead of HTTPS),
-# the URL that you provide above may not yield any result.
+# the URL that you provide above may yield incomplete results (sometimes no result at all).
 #
-# If you know how the URLs may vary, this option allows you to define URL templates,
+# If you know how the URLs could vary, this option allows you to define URL templates,
 # so that Scrapy can try different versions of URLs to increase the chance of finding the correct feed ID on Feedly.
 #
 # This option should be a mapping (a dict), where
 # the key should be a valid regular expression that matches the URLs you wish to apply the corresponding the templates,
 #
 # and the value should be another mapping,
-# where the key is a C-style format string with named placeholders, which will turn into the final URL with the % operator
-# ('%(key)s' % {'key': 'value'})
+# where the key is a %-format string with named placeholders, which will be formatted into the final URL
 # and the value is a number that denotes the priority of the template: templates with a lower number are tried first (similar to how
 # Scrapy middlewares are ordered)
 #
-# The available placeholders are:
+# Available placeholders are:
 # The components of a urllib.parse.urlsplit named tuple:
 #   %(scheme)s          - Network protocol (usually `http` or `https`)
 #   %(netloc)s          - Domain name

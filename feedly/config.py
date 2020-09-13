@@ -36,7 +36,7 @@ class Config(BaseSettings):
             self.merge(json.load(f))
 
     def from_pyfile(self, path):
-        spec = spec_from_file_location('feedly.user_profile', path)
+        spec = spec_from_file_location('feedly.user_preset', path)
         mod = module_from_spec(spec)
         spec.loader.exec_module(mod)
         self.from_object(mod)
