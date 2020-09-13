@@ -219,7 +219,7 @@ _value_ is the value for testing, and _predicate_ is one of the following:
     `  +f tag is img \\`
     `  +f source:netloc is staff.tumblr.com \\`
     `  +f target:netloc under media.tumblr.com \\`
-    `  +f published:year < 2017`
+    `  +f published:year lt 2017`
         Select image URLs pointing to domains under "media.tumblr.com" from posts from "staff.tumblr.com" that are before 2017
 
 Available attributes
