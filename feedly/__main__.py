@@ -20,48 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from importlib import import_module
-
-import click
-from scrapy.crawler import CrawlerProcess
-from scrapy.utils.project import get_project_settings
-
-from . import exporters
-
-
-@click.group()
-def cli():
-    pass
-
-
-@cli.command()
-@click.argument('topic', required=True)
-@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True))
-@click.option('-o', '--output', 'fmt')
-@click.option('+f', '--include', nargs=3, multiple=True, default=None)
-@click.option('-f', '--exclude', nargs=3, multiple=True, default=None)
-@click.argument('exporter-args', nargs=-1, type=click.UNPROCESSED)
-def export(topic, exporter_args, **kwargs):
-    options = dict([a.split('=', 1) for a in exporter_args])
-    try:
-        exporter = import_module(f'.{topic}', exporters.__name__)
-        exporter.export
-    except (AttributeError, ModuleNotFoundError):
-        raise ValueError(f"No exporter found for topic '{topic}'")
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-    exporter.export(**kwargs, **options)
-
-
-@cli.command()
-@click.option('-s', 'spider')
-@click.option('-p', 'profile')
-def debug_spider(spider, profile):
-    settings = get_project_settings()
-    settings['AUTOTHROTTLE_ENABLED'] = False
-    process = CrawlerProcess(settings)
-    process.crawl(spider, profile=profile)
-    process.start(stop_after_crawl=True)
+from .cli import cli
 
 
 if __name__ == '__main__':
-    cli()
+    cli(prog_name='python -m feedly')

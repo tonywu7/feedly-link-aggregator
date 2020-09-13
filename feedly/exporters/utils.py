@@ -16,11 +16,29 @@ def subdomain(x, y):
 filter_ops = {
     'is': operator.eq,
     'under': subdomain,
+    'startswith': str.startswith,
+    'endswith': str.endswith,
+    'contains': operator.contains,
+    'gt': operator.gt,
+    'ge': operator.ge,
+    'lt': operator.lt,
+    'le': operator.le,
 }
 sql_ops = {
-    'is': '"%(column)s" == :%(id)d',
-    'under': 'subdomain("%(column)s", :%(id)d)',
+    'is': ('"%(column)s" == :%(id)d', '%s'),
+    'under': ('subdomain("%(column)s", :%(id)d)', '%s'),
+    'startswith': ('"%(column)s" LIKE :%(id)d', '%s%%'),
+    'endswith': ('"%(column)s" LIKE :%(id)d', '%%%s'),
+    'contains': ('"%(column)s" LIKE :%(id)d', '%%%s%%'),
+    'gt': ('"%(column)s" > :%(id)d', '%s'),
+    'ge': ('"%(column)s" >= :%(id)d', '%s'),
+    'lt': ('"%(column)s" < :%(id)d', '%s'),
+    'le': ('"%(column)s" <= :%(id)d', '%s'),
 }
+equivalencies = [('==', 'is'), ('in', 'contains'), ('>', 'gt'), ('<', 'lt'), ('>=', 'ge'), ('<=', 'le')]
+for k, v in equivalencies:
+    filter_ops[k] = filter_ops[v]
+    sql_ops[k] = sql_ops[v]
 
 
 def build_where_clause(includes=None, excludes=None):
@@ -32,9 +50,10 @@ def build_where_clause(includes=None, excludes=None):
     clauses = []
     for prefix, criteria in (('', includes), ('NOT ', excludes)):
         for key, op, val in criteria:
-            values.append(val)
+            op = sql_ops[op]
+            values.append(op[1] % (val,))
             value_id = len(values)
-            clauses.append(prefix + sql_ops[op] % {'column': key, 'id': value_id})
+            clauses.append(prefix + op[0] % {'column': key, 'id': value_id})
     clauses = ' AND '.join(clauses)
     values = dict(zip(range(1, len(values) + 1), values))
     values = {str(k): v for k, v in values.items()}
