@@ -62,7 +62,7 @@ def filter_depth(request: Request, spider: Spider):
 
 
 def filter_domains(request: Request, spider: Spider):
-    domains = spider.config['ALLOWED_DOMAINS']
+    domains = spider.config['FOLLOW_DOMAINS']
     feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
     if not feed_url or domains is None:
         return True

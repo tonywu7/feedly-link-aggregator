@@ -72,6 +72,7 @@ class Item(Base):
     url = Column(ForeignKey('url.id'), nullable=False)
     source = Column(ForeignKey('url.id'), nullable=False)
 
+    title = Column(types.String())
     author = Column(types.String())
     published = Column(types.DateTime())
     updated = Column(types.DateTime())
@@ -111,7 +112,7 @@ class Markup(Base):
 class Hyperlink(Base):
     source_id = Column(ForeignKey('url.id'), primary_key=True)
     target_id = Column(ForeignKey('url.id'), primary_key=True)
-    html_tag = Column(types.String(), nullable=False)
+    element = Column(types.String(), nullable=False)
 
 
 models = [m for m in Base._decl_class_registry.values() if isinstance(m, type) and issubclass(m, Base)]

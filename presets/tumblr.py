@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-ALLOWED_DOMAINS = {'tumblr.com'}
+FOLLOW_DOMAINS = {'tumblr.com'}
 
 FEED_TEMPLATES = {
     r'.*\.tumblr\.com/?.*': {

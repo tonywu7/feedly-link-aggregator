@@ -81,14 +81,14 @@ class FeedlyRSSSpider(Spider, ABC):
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
 
-    def __init__(self, name=None, profile=None, **kwargs):
+    def __init__(self, name=None, preset=None, **kwargs):
         super().__init__(name=name, **kwargs)
 
         kwargs = {k.upper(): v for k, v in kwargs.items()}
         config = Config()
         config.from_object(self.SpiderConfig)
-        if profile:
-            config.from_pyfile(profile)
+        if preset:
+            config.from_pyfile(preset)
         config.merge(kwargs)
 
         output_dir = Path(config['OUTPUT'])
@@ -218,7 +218,7 @@ class FeedlyRSSSpider(Spider, ABC):
         yield self.next_page(data, response=response)
 
     def digest_feed_export(self, stream):
-        self.logger.info('Digesting crawled data, this may take a while...')
+        self.logger.info('Digesting scraped data, this may take a while...')
 
         conn = sqlite3.connect(self.config['OUTPUT'].joinpath('index.db'))
 
@@ -240,7 +240,7 @@ class FeedlyRSSSpider(Spider, ABC):
                 self.logger.error(e, exc_info=True)
                 self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
                 self.logger.error('(Move the existing file somewhere else.)')
-                self.logger.error('(Unprocessed crawled data remain in `stream.jsonl`)')
+                self.logger.error('(Unprocessed scraped data remain in `stream.jsonl`)')
                 raise
 
         identities = {}
@@ -311,16 +311,16 @@ class FeedlyRSSSpider(Spider, ABC):
         ids_item.update({k: v['id'] for k, v in staged.items()})
         self.logger.info(f'New pages: {len(staged)}')
         bulk_op(
-            'INSERT INTO item (id, hash, url, source, author, published, updated, crawled)'
-            'VALUES (:id, :hash, :url, :source, :author, :published, :updated, :crawled)',
+            'INSERT INTO item (id, hash, url, source, author, title, published, updated, crawled)'
+            'VALUES (:id, :hash, :url, :source, :author, :title, :published, :updated, :crawled)',
             staged.values(),
         )
 
         staged = {(ids_url[((p[0],),)], ids_url[((p[1],),)]): t for p, t in hyperlinks.items()}
         staged = {p: t for p, t in staged.items() if p not in identities['hyperlink']}
-        staged = [(p[0], p[1], t['html_tag']) for p, t in staged.items()]
+        staged = [(p[0], p[1], t['element']) for p, t in staged.items()]
         self.logger.info(f'New hyperlinks: {len(staged)}')
-        bulk_op('INSERT INTO hyperlink (source_id, target_id, html_tag) VALUES (?, ?, ?)', staged)
+        bulk_op('INSERT INTO hyperlink (source_id, target_id, element) VALUES (?, ?, ?)', staged)
 
         staged = {ids_url[((k,),)]: v.get('title', '') for k, v in feeds.items()}
         staged = {k: v for k, v in staged.items() if (k,) not in identities['feed']}
@@ -372,6 +372,7 @@ class SQLExporterSpiderMiddleware:
                 'url': item.url,
                 'source': item.source['feed'],
                 'author': item.author,
+                'title': item.title,
                 'published': item.published.isoformat(),
                 'updated': item.updated.isoformat() if item.updated else None,
                 'crawled': data['time_crawled'],
@@ -381,7 +382,7 @@ class SQLExporterSpiderMiddleware:
             yield {'__': 'url', 'url': src}
             for u, kws in urls.items():
                 yield {'__': 'url', 'url': u}
-                yield {'__': 'hyperlink', 'source_id': src, 'target_id': u, 'html_tag': list(kws['tag'])[0]}
+                yield {'__': 'hyperlink', 'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]}
 
             for k in item.keywords:
                 yield {'__': 'keyword', 'keyword': k}
