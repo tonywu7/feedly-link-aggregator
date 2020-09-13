@@ -23,15 +23,17 @@
 import logging
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote, unquote
 
+from ..sql.utils import bulk_fetch
+from ..utils import pathsafe
 from .exporters import MappingCSVExporter, MappingLineExporter
 from .utils import build_where_clause, with_db
-from ..sql.utils import bulk_fetch
 
 log = logging.getLogger('url-exporter')
 
 
-def build_select(select):
+def build_ctes(select):
     urlexpansions = []
     url_tables = ('feed', 'source', 'target')
     url_attrs = ['scheme', 'netloc', 'path', 'query']
@@ -46,19 +48,23 @@ def build_select(select):
     for attr, range_ in zip(date_attrs, date_substr):
         start, length = range_
         dateexpansions.append(f"""CAST(substr(item.published, {start}, {length}) AS INTEGER) AS "{attr}" """)
+    date_attrs.append('date')
     dateexpansions = ', '.join(dateexpansions)
 
-    columns = []
+    column_maps = {}
     for table in url_tables:
         for attr in url_attrs:
-            columns.append(f'{table}.{attr} AS "{table}:{attr}"')
+            column_maps[f'{table}:{attr}'] = f'{table}.{attr}'
     for attr in date_attrs:
-        columns.append(f'items.{attr} AS "published:{attr}"')
-    columns = ', '.join(columns)
-    return select % {'urlexpansions': urlexpansions, 'columns': columns, 'dateexpansions': dateexpansions}
+        column_maps[f'published:{attr}'] = f'items.{attr}'
+    column_maps['tag'] = 'hyperlink.element'
+    column_maps['source:title'] = 'items.title'
+    column_maps['feed:title'] = 'feed_info.title'
+
+    return select % {'urlexpansions': urlexpansions, 'dateexpansions': dateexpansions}, column_maps
 
 
-SELECT = """
+CTE = """
 WITH urlsplits AS (
     SELECT
         url.id AS id,
@@ -73,15 +79,16 @@ items AS (
         item.source AS source,
         item.title AS title,
         item.author AS author,
+        item.published AS date,
         %(dateexpansions)s
     FROM
         item
 )
+"""
+
+SELECT = """
 SELECT
-    %(columns)s,
-    hyperlink.element AS "tag",
-    items.title AS "source:title",
-    feed_info.title AS "feed:title"
+    %(columns)s
 FROM
     hyperlink
     JOIN urlsplits AS source ON source.id == hyperlink.source_id
@@ -90,20 +97,40 @@ FROM
     JOIN feed AS feed_info ON items.source == feed_info.url_id
     JOIN urlsplits AS feed ON items.source == feed.id
 """
-SELECT = build_select(SELECT)
 
 
 @with_db
 def export(
     conn: sqlite3.Connection, wd: Path, output: Path, fmt='urls.txt',
-    include=None, exclude=None, key=None, format='lines',
+    include=None, exclude=None, key=None, format='lines', escape=None,
 ):
-    where, values = build_where_clause(include, exclude)
-    select = f'{SELECT} WHERE {where}'
+    cte, column_maps = build_ctes(CTE)
+
+    if format == 'lines':
+        keys = (key,) if key else ('target:url',)
+    else:
+        keys = key and set(key.split(','))
+
+    where, values, _ = build_where_clause(include, exclude)
+
+    columns = ', '.join([f'{v} AS "{k}"' for k, v in column_maps.items()])
+    column_keys = ', '.join([f'"{k}"' for k in keys])
+
+    select = SELECT % {'columns': columns}
+    select = f'{cte}{select} WHERE {where} GROUP BY {column_keys}'
+    log.debug(select)
+
+    escape_func = {
+        'percent': quote,
+        'replace': pathsafe,
+        'unquote': unquote,
+        'unquote-replace': lambda s: pathsafe(unquote(s)),
+    }
+    escape_func = escape_func.get(escape)
 
     formatters = {
-        'lines': (MappingLineExporter, (key or 'target:url', output, fmt)),
-        'csv': (MappingCSVExporter, (key and set(key.split(',')), output, fmt)),
+        'lines': (MappingLineExporter, (keys[0], output, fmt, escape_func)),
+        'csv': (MappingCSVExporter, (keys, output, fmt, escape_func)),
     }
     cls, args = formatters[format]
 
@@ -115,11 +142,12 @@ def export(
 
 
 help_text = """
-Export URLs in various formats.
+Select and export URLs in various formats.
 
 Synopsis
 --------
-export _urls_ -i <input> [**-o** _name or template_] [[**+f|-f** _filter_]...] [**key=**_attrs..._] [**format=**_lines|csv_]
+export _urls_ -i <input> [**-o** _name or template_] [[**+f|-f** _filter_]...]
+  [**key=**_attrs..._] [**format=**_lines|csv_] [**escape=**_none|percent|replace|unquote|unquote-replace_]
 
 Description
 -----------
@@ -135,7 +163,7 @@ Options
 This exporter supports the following parameters, specified as `key=value` pairs, in addition to
 the exporter options:
 
-    _format=[lines|csv]_
+    _format=lines|csv_
         Output format. Default is _lines_.
 
     _key=[...]_
@@ -143,6 +171,14 @@ the exporter options:
         If format is _lines_, you may only choose one attribute, e.g. `key=target:netloc`.
         If format is _csv_, you may export multiple attributes, e.g. `key=source:netloc,tag`
         Default is _target:url_ for _lines_, and _all attributes_ for _csv_.
+
+    _escape=none|percent|replace|unquote|unquote-replace_
+        Escape filenames. This is useful if you want URL path names to be part of the filename.
+        _percent_ will use URL percent-encodings. For example, space characters will be encoded as `%20`.
+        _replace_ will aggressively replace all punctuations and characters not in the ISO-8859-1 encoding with `-`.
+        _unquote_ is the inverse of _percent_: replace all percent-encoded characters with the original ones.
+        _unquote-replace_ first unquotes the filename, then uses _replace_ on it.
+        Default (when unspecified) is _none_.
 
     Example: `python -m export urls -i input -o out.txt format=csv key=source:netloc,tag`
 
@@ -214,6 +250,7 @@ _value_ is the value for testing, and _predicate_ is one of the following:
 
     `export urls ... +f target:path startswith /wp-content`
         Select URLs whose path components begin with "/wp-content". Note that URL paths always include the leading /
+        and are %-encoded — e.g. if you want to specify a path with spaces, you will need to use `%20`.
 
     `export urls ... \\`
     `  +f tag is img \\`
@@ -268,12 +305,16 @@ Each attribute is in the form of either _object_ or _object:key_.
 
         **Keys**:
 
+            _date_
+                The complete datetime string in the ISO-8601 format, such as `1970-01-01T00:00:00+00:00`,
+                can be used with string operators such as _startswith_: `published:date startswith 1970-01`.
             _year_, _month_, _day_, _hour_, _minute_, _second_
                 Each is an integer. _hour_ is in 24-hour format.
 
             Example
             -------
             For the _source_ `https://xkcd.com/937/` which was published on `Fri, 12 Aug 2011 at 04:05:04 GMT`,
+            _published:date_ is `2011-08-12T04:05:04+00:00`
             _published:year_ is `2011`
             _published:month_ is `8`.
 

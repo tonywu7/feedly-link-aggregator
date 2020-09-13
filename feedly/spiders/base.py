@@ -37,12 +37,15 @@ import simplejson as json
 from scrapy import Spider
 from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_closed, spider_opened
+from twisted.python.failure import Failure
 
-from .. import feedly, utils
+from .. import feedly
 from ..config import Config
 from ..feedly import FeedlyEntry
-from ..sql import SCHEMA_VERSION, utils as db_utils
-from ..utils import JSONDict
+from ..sql import SCHEMA_VERSION
+from ..sql import utils as db_utils
+from ..urlkit import build_urls, select_templates
+from ..utils import HyperlinkStore, JSONDict, guard_json
 
 log = logging.getLogger('feedly.spiders')
 
@@ -55,6 +58,8 @@ class FeedlyRSSSpider(Spider, ABC):
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
             'feedly.spiders.base.SQLExporterSpiderMiddleware': 200,
             'feedly.spiders.base.PersistenceSpiderMiddleware': 300,
+            'feedly.spiders.base.FetchSourceSpiderMiddleware': 500,
+            'feedly.spiders.base.CrawledItemSpiderMiddleware': 700,
         },
     }
 
@@ -62,9 +67,7 @@ class FeedlyRSSSpider(Spider, ABC):
         OUTPUT = f'./crawl.{datetime.now().strftime("%Y%m%d%H%M%S")}'
 
         FEED = 'https://xkcd.com/atom.xml'
-        FEED_TEMPLATES = {
-            r'.*': {
-                '%(original)s': 999}}
+        FEED_TEMPLATES = {}
 
         DOWNLOAD_ORDER = 'oldest'
         DOWNLOAD_PER_BATCH = 1000
@@ -122,15 +125,13 @@ class FeedlyRSSSpider(Spider, ABC):
         return feedly.build_api_url('streams', streamId=feed_id, **params)
 
     def locate_feed_url(self, query, derive=True, **kwargs):
-        if derive:
-            templates = self.config['FEED_TEMPLATES']
-            templates = {k: v for k, v in templates.items() if k.match(query)}
-            templates = [t[1] for t in sorted(
-                (priority, tmpl)
-                for pattern, tmpls in templates.items()
-                for tmpl, priority in tmpls.items()
-            )]
-            urls = utils.build_urls(query, templates)
+        templates = self.config['FEED_TEMPLATES']
+        if derive and templates:
+            try:
+                urls = build_urls(query, *select_templates(query, templates))
+            except ValueError:
+                self.logger.debug(f'No template for {query}')
+                urls = [query]
         else:
             urls = [query]
 
@@ -187,7 +188,7 @@ class FeedlyRSSSpider(Spider, ABC):
         if not response:
             return
 
-        data = utils.guard_json(response.text)
+        data = guard_json(response.text)
         items = data.get('items')
         source = response.meta['feed_url']
         if items:
@@ -204,7 +205,7 @@ class FeedlyRSSSpider(Spider, ABC):
             self.stats.inc_value('rss/page_count')
 
             depth = response.meta.get('depth', 0)
-            store = utils.HyperlinkStore()
+            store = HyperlinkStore()
             for k, v in entry.markup.items():
                 store.parse_html(entry.url, v)
 
@@ -340,7 +341,58 @@ class FeedlyRSSSpider(Spider, ABC):
         conn.close()
 
 
-class SQLExporterSpiderMiddleware:
+class FetchSourceSpiderMiddleware:
+    def __init__(self):
+        self.logger = logging.getLogger('feedly.source')
+        self.initialized = False
+
+    def init(self, spider):
+        self.scrape_source = spider.config.getbool('SCRAPE_SOURCE_PAGE', False)
+        self.initialized = True
+
+    def process_spider_output(self, response, result, spider):
+        if not self.initialized:
+            self.init(spider)
+        if not self.scrape_source:
+            yield from result
+
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data or 'source_fetched' in data:
+                yield data
+                continue
+            item: FeedlyEntry = data['item']
+            yield Request(
+                item.url, callback=self.parse_source,
+                errback=self.handle_source_failure,
+                meta={'data': data},
+            )
+
+    def parse_source(self, response: TextResponse):
+        meta = response.meta
+        data = meta['data']
+        data['source_fetched'] = True
+        item: FeedlyEntry = data['item']
+        store: HyperlinkStore = data['urls']
+        try:
+            if response.status >= 400:
+                self.logger.debug(f'Dropping {response}')
+                raise AttributeError
+            body = response.text
+            item.markup['original'] = body
+            store.parse_html(item.url, body)
+        except AttributeError:
+            pass
+        yield data
+
+    def handle_source_failure(self, failure: Failure):
+        self.logger.debug(failure)
+        request = failure.request
+        data = request.meta['data']
+        data['source_fetched'] = True
+        yield data
+
+
+class CrawledItemSpiderMiddleware:
     def __init__(self):
         self.crawled_items = set()
         self.initialized = False
@@ -353,18 +405,23 @@ class SQLExporterSpiderMiddleware:
         self.initialized = True
 
     def process_spider_output(self, response, result, spider):
-        if not self.initialized:
-            self.init(spider)
-
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
                 yield data
                 continue
             item: FeedlyEntry = data['item']
-            urls: utils.HyperlinkStore = data['urls']
+            if item.id_hash not in self.crawled_items:
+                yield data
 
-            if item.id_hash in self.crawled_items:
+
+class SQLExporterSpiderMiddleware:
+    def process_spider_output(self, response, result, spider):
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data:
+                yield data
                 continue
+            item: FeedlyEntry = data['item']
+            urls: HyperlinkStore = data['urls']
 
             yield {
                 '__': 'item',
@@ -408,6 +465,7 @@ class PersistenceSpiderMiddleware:
         self.finished = {}
         self.fcrawling = None
         self.ffinished = None
+        self.logger = logging.getLogger('feedly.persistence')
 
     def init(self, spider):
         fcrawling_path = spider.config['OUTPUT'].joinpath('crawling.json')
@@ -430,9 +488,11 @@ class PersistenceSpiderMiddleware:
             if isinstance(r, Request):
                 feed_url = r.meta.get('feed_url')
                 if feed_url in self.finished:
-                    spider.logger.info(f'Skipping finished feed {feed_url}')
-                    continue
-            if isinstance(r, Request) or '_persist' not in r:
+                    self.logger.info(f'Skipping finished feed {feed_url}')
+                else:
+                    yield r
+                continue
+            if '_persist' not in r:
                 yield r
                 continue
             t = r['_persist']
@@ -448,7 +508,7 @@ class PersistenceSpiderMiddleware:
         if not self.crawling:
             yield from start_requests
         else:
-            spider.logger.info(f'Resuming {len(self.crawling)} feed(s)')
+            self.logger.info(f'Resuming {len(self.crawling)} feed(s)')
             reqs = [
                 spider.locate_feed_url(url, derive=False, meta={**meta, 'inc_depth': True})
                 for url, meta in self.crawling.items()
@@ -481,7 +541,10 @@ class PersistenceSpiderMiddleware:
         json.dump(self.crawling, self.fcrawling, default=lambda _: None)
         self.fcrawling.flush()
 
-    def _close(self, spider):
+    def _close(self, spider, reason):
         self._dump_crawling()
         self.fcrawling.close()
         self.ffinished.close()
+        if reason == 'finished':
+            os.remove(self.fcrawling.name)
+            os.remove(self.ffinished.name)

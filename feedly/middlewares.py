@@ -83,7 +83,7 @@ class FeedlyScanDownloaderMiddleware:
         scans = []
         for feed_url in feeds:
             feed_id = f'{prefix}{feed_url}'
-            url = spider.get_streams_url(feed_id, count=20)
+            url = spider.get_streams_url(feed_id, count=1)
             scans.append(spider.crawler.engine.download(Request(url, meta={'feed': feed_id}), spider))
         results = await DeferredList(scans)
 

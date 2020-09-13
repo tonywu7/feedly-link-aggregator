@@ -24,14 +24,17 @@ import csv
 import logging
 import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import simplejson as json
 
 
 class MappingExporter(ABC):
-    def __init__(self, output, filename):
+    def __init__(self, output, filename, escape=None):
         self.output = output
         self.filename = filename
+        self.ext = ''.join(Path(filename).suffixes)
+        self.escape = escape or (lambda s: s)
         self.files = {}
         self.logger = logging.getLogger('exporter')
 
@@ -40,19 +43,24 @@ class MappingExporter(ABC):
         return item
 
     def get_file(self, item):
-        filename = self.output.joinpath(self.filename % item)
-        out = self.files.get(filename)
+        filename = self.escape(self.filename % item)
+        if filename[-1] == '/':
+            filename = f'{filename}index{self.ext}'
+        path = self.output.joinpath(filename)
+        out = self.files.get(path)
         if not out:
-            os.makedirs(filename.parent, exist_ok=True)
-            self.files[filename] = out = open(filename, 'a+')
-            self.logger.info(f'New file {filename}')
-        return out, filename
+            os.makedirs(path.parent, exist_ok=True)
+            self.files[path] = out = open(path, 'a+')
+            self.logger.info(f'New file {path}')
+        return out, path
 
     def write(self, item):
         out, _ = self.get_file(item)
         out.write(f'{self.format(item)}\n')
 
     def close(self):
+        if not self.files:
+            self.logger.warn('Exported nothing!')
         for f in self.files.values():
             f.close()
 

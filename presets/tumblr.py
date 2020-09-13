@@ -2,13 +2,23 @@ from urllib.parse import urlsplit
 
 FOLLOW_DOMAINS = {'tumblr.com'}
 
+
+def converter(base, match):
+    for scheme in ('http', 'https'):
+        for ending in ('rss', 'rss#_=_'):
+            yield f'{scheme}://{base.netloc}/{ending}'
+
+
+def deactivated_converter(base, match):
+    for scheme in ('http', 'https'):
+        for ending in ('rss', 'rss#_=_'):
+            yield f'{scheme}://{match.group(1)}.tumblr.com/{ending}'
+    yield from converter(base, match)
+
+
 FEED_TEMPLATES = {
-    r'.*\.tumblr\.com/?.*': {
-        'http://%(netloc)s/rss': 100,
-        'http://%(netloc)s/rss#_=_': 200,
-        'https://%(netloc)s/rss': 300,
-        'https://%(netloc)s/rss#_=_': 400,
-    },
+    r'https?://(.*)-deactivated\d*\.tumblr\.com/?.*': deactivated_converter,
+    r'.*\.tumblr\.com/?.*': converter,
 }
 
 

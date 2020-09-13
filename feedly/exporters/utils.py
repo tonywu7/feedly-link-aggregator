@@ -4,6 +4,7 @@ import sqlite3
 from functools import wraps
 from pathlib import Path
 
+from ..datastructures import labeled_sequence
 from ..sql import SCHEMA_VERSION
 from ..sql.functions import register_all
 from ..sql.utils import verify_version
@@ -43,21 +44,22 @@ for k, v in equivalencies:
 
 def build_where_clause(includes=None, excludes=None):
     if not includes and not excludes:
-        return 'TRUE', ()
+        return 'TRUE', (), set()
     values = []
     includes = includes or []
     excludes = excludes or []
     clauses = []
+    required_columns = set()
     for prefix, criteria in (('', includes), ('NOT ', excludes)):
         for key, op, val in criteria:
+            required_columns.add(key)
             op = sql_ops[op]
             values.append(op[1] % (val,))
             value_id = len(values)
             clauses.append(prefix + op[0] % {'column': key, 'id': value_id})
     clauses = ' AND '.join(clauses)
-    values = dict(zip(range(1, len(values) + 1), values))
-    values = {str(k): v for k, v in values.items()}
-    return clauses, values
+    values = labeled_sequence(values, zero_based=False, as_str=True)
+    return clauses, values, required_columns
 
 
 class MappingFilter:

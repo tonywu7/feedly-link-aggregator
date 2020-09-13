@@ -27,7 +27,7 @@ from pathlib import Path
 
 from scrapy.settings import BaseSettings
 
-from .utils import compose_mappings
+from .datastructures import compose_mappings
 
 
 class Config(BaseSettings):

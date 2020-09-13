@@ -20,20 +20,22 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 from typing import List
 from urllib.parse import urlsplit
 
 from scrapy.http import Request, TextResponse
 
-from .. import utils
+from ..datastructures import compose_mappings
 from ..feedly import FeedlyEntry
+from ..utils import HyperlinkStore
 from .base import FeedlyRSSSpider
 
 
 class FeedClusterSpider(FeedlyRSSSpider):
     name = 'cluster'
 
-    custom_settings = utils.compose_mappings(FeedlyRSSSpider.custom_settings, {
+    custom_settings = compose_mappings(FeedlyRSSSpider.custom_settings, {
         'SPIDER_MIDDLEWARES': {
             'feedly.spiders.cluster.ExplorationSpiderMiddleware': 900,
         },
@@ -83,6 +85,7 @@ class ExplorationSpiderMiddleware:
 
     def __init__(self, crawler):
         self.stats = crawler.stats
+        self.logger = logging.getLogger('feedly.explore')
         self._discovered = set()
 
     def process_spider_output(self, response: TextResponse, result, spider: FeedClusterSpider):
@@ -102,7 +105,7 @@ class ExplorationSpiderMiddleware:
 
     def process_item(
         self, response: TextResponse,
-        item: FeedlyEntry, store: utils.HyperlinkStore, depth: int,
+        item: FeedlyEntry, store: HyperlinkStore, depth: int,
         spider: FeedClusterSpider,
     ):
         dest = {urlsplit(k): v for k, v in store.items()}
@@ -111,10 +114,10 @@ class ExplorationSpiderMiddleware:
 
         sites = {f'{u.scheme}://{u.netloc}' for u in dest} - self._discovered
         self._discovered |= sites
-        spider.logger.debug(f'depth={depth}; +{len(sites)}')
+        self.logger.debug(f'depth={depth}; +{len(sites)}')
 
         for url in sites:
-            spider.logger.debug(f'{url} (depth={depth})')
+            self.logger.debug(f'{url} (depth={depth})')
             yield spider.locate_feed_url(
                 url, meta={
                     'inc_depth': True,
