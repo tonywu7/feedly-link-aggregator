@@ -1,0 +1,2 @@
+python-igraph==0.8.2
+  texttable==1.6.2
