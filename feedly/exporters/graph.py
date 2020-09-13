@@ -37,7 +37,7 @@ def create_hyperlink_graph(db):
     SELECT
         source.url AS "source",
         target.url AS "target",
-        hyperlink.html_tag AS "html_tag",
+        hyperlink.element AS "tag",
         item.published AS "timestamp"
     FROM
         hyperlink
@@ -54,7 +54,7 @@ def create_hyperlink_graph(db):
         dst = row['target']
         vertices[src] = True
         vertices[dst] = True
-        edges[(src, dst)] = (row['html_tag'], row['timestamp'])
+        edges[(src, dst)] = (row['tag'], row['timestamp'])
     log.info('Finished reading database...')
 
     log.info('Creating graph...')
@@ -65,7 +65,6 @@ def create_hyperlink_graph(db):
     g.add_edges(edges)
     g.vs['name'] = list(vertices)
     g.es['type'], g.es['timestamp'] = tuple(zip(*edges.values()))
-
     return g
 
 
@@ -79,11 +78,20 @@ def create_domain_graph(db):
         FROM
             url
     ),
+    weight AS (
+        SELECT
+            domains.domain AS domain,
+            count(domains.domain) AS count
+        FROM
+            domains
+        GROUP BY
+            domain
+    ),
     edges AS (
         SELECT
             hyperlink.source_id AS source,
             hyperlink.target_id AS target,
-            hyperlink.html_tag AS tag
+            hyperlink.element AS tag
         FROM
             hyperlink
     )
@@ -91,11 +99,15 @@ def create_domain_graph(db):
         src.domain AS source,
         dst.domain AS target,
         edges.tag AS tag,
-        count(edges.tag) AS count
+        count(edges.tag) AS count,
+        srcw.count AS srcw,
+        dstw.count AS dstw
     FROM
         edges
         JOIN domains AS src ON edges.source == src.id
         JOIN domains AS dst ON edges.target == dst.id
+        JOIN weight AS srcw ON src.domain == srcw.domain
+        JOIN weight AS dstw ON dst.domain == dstw.domain
     GROUP BY
         source,
         target,
@@ -109,8 +121,8 @@ def create_domain_graph(db):
     for row in bulk_fetch(db.execute(SELECT), log=log):
         src = row['source']
         dst = row['target']
-        vertices[src] = True
-        vertices[dst] = True
+        vertices[src] = row['srcw']
+        vertices[dst] = row['dstw']
         tag = row['tag']
         attrs.add(tag)
         counts = edges.setdefault((src, dst), {})
@@ -124,21 +136,70 @@ def create_domain_graph(db):
     g.add_vertices(len(vertices))
     g.add_edges(edges)
     g.vs['name'] = list(vertices)
+    g.vs['weight'] = list(vertices.values())
     attrs = {a: tuple(v.get(a, 0) for v in edges.values()) for a in attrs}
     for k, t in attrs.items():
         g.es[k] = t
-
     return g
 
 
 @with_db
-def export(conn: sqlite3.Connection, wd: Path, output: Path, fmt='index.graphml', graph_type='hyperlink', *args, **kwargs):
+def export(conn: sqlite3.Connection, wd: Path, output: Path, fmt='index.graphml', graphtype='hyperlink', *args, **kwargs):
     reader = {
         'hyperlink': create_hyperlink_graph,
         'domain': create_domain_graph,
-    }[graph_type]
+    }[graphtype]
     g = reader(conn)
-
     log.info('Writing...')
     with open(output.joinpath(fmt), 'w+') as f:
         g.save(f, format='graphml')
+    log.info('Done.')
+
+
+help_text = """
+Export feed data as graph data.
+
+Synopsis
+--------
+export _graph_ -i <input> -o [name] [**graphtype=**_hyperlink|domain_]
+
+Description
+-----------
+This exporter lets you represent scraped URL data using graph data structure.
+
+**Requires igraph. You must install _requirements-optional.txt_.**
+
+Currently this exports graphs in _GraphML_ format only.
+
+This exporter does not support filtering or name templates.
+
+Options
+-------
+_graphtype=[hyperlink|domain]_
+
+    **_hyperlink_**
+        **Directed, self-loop allowed**
+        **Vertices**
+            Each _source_ or _target_ URL (representing a file on a website);
+            **Attributes**
+                _name_: The URL
+        **Edges**
+            Each hyperlink found in _source_ pointing to _target_;
+            **Attributes**
+                _type_: The HTML element
+                _timestamp_: UTC date and time when _source_ was published, in ISO-8601 format
+
+    **_domain_**
+        **Directed, self-loop allowed**
+        **Vertices**
+            Domains of each URL
+            **Attributes**
+                _name_: Domain name
+                _weight_: The number of files found under the domain
+        **Edges**
+            Each hyperlink found in _source_ pointing to _target_ creates an edge from
+            _source:domain_ to _target:domain_; not repeated.
+            **Attributes**
+                _<tag names...>_: Each hyperlink in _source_ pointing to _target_ that is
+                found on a particular HTML tag increases the _<tag>_ attribute by 1.
+"""

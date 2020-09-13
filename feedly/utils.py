@@ -22,12 +22,16 @@
 
 from __future__ import annotations
 
+import click
 import logging
+import re
 import time
 from collections.abc import MutableMapping, MutableSequence, MutableSet
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import wraps
 from hashlib import sha1
+from textwrap import dedent, indent
 from typing import Any, Dict, List, Tuple, Union
 from urllib.parse import SplitResult, urlsplit
 
@@ -189,8 +193,8 @@ class HyperlinkStore(KeywordStore):
     def parse_html(self, source, markup, **kwargs):
         markup = parse_html(markup)
         for attrib in self.TARGET_ATTRS:
-            html_tags = markup.css(f'[{attrib}]')
-            for tag in html_tags:
+            elements = markup.css(f'[{attrib}]')
+            for tag in elements:
                 url = tag.attrib.get(attrib)
                 if not is_absolute_http(url):
                     continue
@@ -211,3 +215,50 @@ SIMPLEJSON_KWARGS = {
     'for_json': True,
     'iterable_as_array': True,
 }
+
+
+def stylize(pattern, **styles):
+    def wrapper(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            for s in func(*args, **kwargs):
+                yield re.sub(pattern, lambda m: click.style(m.group(1), **styles), s)
+        return wrapped
+    return wrapper
+
+
+def markdown_inline(func):
+    @stylize(re.compile(r'`(.*?)`'), fg='green')
+    @stylize(re.compile(r'_(.*?)_'), fg='blue', underline=True)
+    @stylize(re.compile(r'\*\*(.*?)\*\*'), fg='yellow', bold=True)
+    def f(*args, **kwargs):
+        yield from func(*args, **kwargs)
+    return f
+
+
+@markdown_inline
+def numpydoc2click(doc: str):
+    PARA = re.compile(r'((?:.+\n)+)')
+    PARA_WITH_HEADER = re.compile(r'(^ *)(.+)\n(?:\s*(?:-+|=+))\n((?:.+\n)+)')
+    paragraphs = list(reversed(PARA.findall(dedent(doc))))
+    yield paragraphs.pop()
+    while paragraphs:
+        p = paragraphs.pop()
+        match = PARA_WITH_HEADER.match(p)
+        if match:
+            indentation, header, p = match.group(1), match.group(2), match.group(3)
+            if not indentation:
+                header = header.upper()
+            yield indent(click.style(header, bold=True), indentation)
+            yield '\n'
+            yield indent(p, '    ')
+        else:
+            yield indent(p, '    ')
+        yield '\n'
+
+
+get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
+
+
+def get_help(ctx):
+    return next(get_help_gen(ctx))
