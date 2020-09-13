@@ -20,14 +20,43 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+
+import re
+from functools import wraps
 from importlib import import_module
+from textwrap import dedent, indent
 
 import click
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
-from .utils import get_help, numpydoc2click
+
+
+def stylize(pattern, **styles):
+    def wrapper(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            for s in func(*args, **kwargs):
+                yield re.sub(pattern, lambda m: click.style(m.group(1), **styles), s)
+        return wrapped
+    return wrapper
+
+
+def markdown_inline(func):
+    @stylize(re.compile(r'`(.*?)`'), fg='green')
+    @stylize(re.compile(r'_(.*?)_'), fg='blue', underline=True)
+    @stylize(re.compile(r'\*\*(.*?)\*\*'), fg='yellow', bold=True)
+    def f(*args, **kwargs):
+        yield from func(*args, **kwargs)
+    return f
+
+
+get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
+
+
+def get_help(ctx):
+    return next(get_help_gen(ctx))
 
 
 @click.group()
@@ -59,10 +88,11 @@ def help_export(ctx: click.Context, param, exporter):
         click.echo(get_help(ctx))
         ctx.exit()
 
+    @markdown_inline
     def help_subcommand():
         yield from [
             click.style('Data Exporter Help\n\n'.upper(), fg='black', bg='white', bold=True),
-            f'For help on the syntax of the `export` command itself, use {click.style("export --help", fg="green")}.\n\n',
+            'For help on the syntax of the _export_ command itself, use `export --help`.\n\n',
             click.style(ctx.meta['topic_name'], fg='black', bg='magenta', bold=True),
         ]
         doc = numpydoc2click(exporter.help_text)
@@ -128,3 +158,23 @@ def debug_spider(spider, preset):
     process = CrawlerProcess(settings)
     process.crawl(spider, preset=preset)
     process.start(stop_after_crawl=True)
+
+
+def numpydoc2click(doc: str):
+    PARA = re.compile(r'((?:.+\n)+)')
+    PARA_WITH_HEADER = re.compile(r'(^ *)(.+)\n(?:\s*(?:-+|=+))\n((?:.+\n)+)')
+    paragraphs = list(reversed(PARA.findall(dedent(doc))))
+    yield paragraphs.pop()
+    while paragraphs:
+        p = paragraphs.pop()
+        match = PARA_WITH_HEADER.match(p)
+        if match:
+            indentation, header, p = match.group(1), match.group(2), match.group(3)
+            if not indentation:
+                header = header.upper()
+            yield indent(click.style(header, bold=True), indentation)
+            yield '\n'
+            yield indent(p, '    ')
+        else:
+            yield indent(p, '    ')
+        yield '\n'

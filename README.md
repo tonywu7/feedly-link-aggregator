@@ -9,7 +9,8 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 ## Contents
 
 - [Documentation](#documentation)
-    - [Spider options and presets](#spider-options-and-presets)
+    - [Crawling](#crawling)
+    - [Presets](#presets)
     - [Exporting](#exporting)
     - [Cluster spider](#cluster-spider)
 - [Changelog](#changelog)
@@ -53,9 +54,9 @@ where `<dir>` is the same directory.
 
 ## Documentation
 
-**![#f03c15](https://placehold.it/12/f06073/000000?text=+) This version (v0.10) has command syntax that is different from previous versions.**
+**![#f03c15](https://placehold.it/12/f06073/000000?text=+) This version (v0.10.1) has command syntax that is different from previous versions.**
 
-### Spider options and presets
+### Crawling
 
 ```bash
 > scrapy crawl <spider> -a feed='<url>' -a output='<dir>' [-a additional options...]
@@ -66,10 +67,12 @@ but attempts to further explore websites that are mentioned in the beginning fee
 
 Each spider option is specified using the `-a` option followed by a `key=value` pair.
 
+### Presets
+
 In addition to specifying options via the command line, you can also specify a preset.
 
 ```bash
-> scrapy crawl <spider-name> -a preset='<path-to-file>'
+> scrapy crawl <spider> -a preset='<path-to-file>'
 ```
 
 A preset is a just a Python script whose top-level variable names and values are used as key-value pairs to populate
@@ -82,7 +85,7 @@ OUTPUT = f'instance/xkcd-{datetime.now()}'
 ...
 ```
 
-Only variables whose names contains only uppercase letters, numbers and underscore will be used.
+Only variables whose names contain only uppercase letters, numbers and underscores will be used.
 
 Presets also let you define more complex behaviors, such as URL filtering, since you can define functions and mappings.
 
@@ -110,18 +113,29 @@ python -m feedly export urls -i data \
   --include target:netloc under media.tumblr.com \
   --include target:path endswith .gif \
   --include published:year lt 2017 \
-  --output "%(feed:netloc)s/%(published:year)d%(published:month)d.txt"
+  --output "%(feed:netloc)s/%(published:year)d%(published:month)02d.txt"
 ```
 
 This command will select
+
 - all image URLs that end with `.gif`
 - pointing to domains under `media.tumblr.com` (Tumblr CDN servers)
 - from posts before 2017
 - found on all crawled subdomains of `tumblr.com` (such as `staff.tumblr.com`),
 
 export them, and sort them into folders and files based on
+
 - the source domain name (i.e. blog website)
-- followed by the year and month of the date the post was published.
+- followed by the year and month of the date the post was published
+
+resulting in a folder structure that looks like
+
+    ./data/out/
+        staff.tumblr.com/
+            201602.txt
+            201603.txt
+            ...
+        .../
 
 ----
 
@@ -225,7 +239,7 @@ Cluster spider works best for sites that have predefined endpoints for RSS feeds
 
 ## Changelog
 
-- **v0.10**
+- **v0.10.1**
     - **![#f03c15](https://placehold.it/12/f06073/000000?text=+) This version introduces API-breaking changes.**
     - _Command change:_ The commands for both crawling and exporting has changed. See the following two sections for details.
     - _Output:_

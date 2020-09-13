@@ -24,7 +24,7 @@ import logging
 import sys
 from typing import Dict, Union
 
-from .utils import compose_mappings
+from .datastructures import compose_mappings
 
 try:
     import termcolor

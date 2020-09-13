@@ -26,8 +26,9 @@ from pathlib import Path
 
 import igraph
 
-from .utils import with_db
+from ..datastructures import labeled_sequence
 from ..sql.utils import bulk_fetch
+from .utils import with_db
 
 log = logging.getLogger('graph-exporter')
 
@@ -47,6 +48,7 @@ def create_hyperlink_graph(db):
     """
     vertices = {}
     edges = {}
+    log.debug(SELECT)
 
     log.info('Reading database...')
     for row in bulk_fetch(db.execute(SELECT), log=log):
@@ -59,12 +61,13 @@ def create_hyperlink_graph(db):
 
     log.info('Creating graph...')
     g = igraph.Graph(directed=True)
-    vertex_ids = {k: i for k, i in zip(vertices, range(len(vertices)))}
+    vertex_ids = labeled_sequence(vertices, key=False)
     edges = {(vertex_ids[t[0]], vertex_ids[t[1]]): v for t, v in edges.items()}
     g.add_vertices(len(vertices))
     g.add_edges(edges)
     g.vs['name'] = list(vertices)
     g.es['type'], g.es['timestamp'] = tuple(zip(*edges.values()))
+    log.info(f'|V| = {g.vcount()}; |E| = {g.ecount()}')
     return g
 
 
@@ -116,6 +119,7 @@ def create_domain_graph(db):
     vertices = {}
     edges = {}
     attrs = set()
+    log.debug(SELECT)
 
     log.info('Reading database...')
     for row in bulk_fetch(db.execute(SELECT), log=log):
@@ -131,7 +135,7 @@ def create_domain_graph(db):
 
     log.info('Creating graph...')
     g = igraph.Graph(directed=True)
-    vertex_ids = {k: i for k, i in zip(vertices, range(len(vertices)))}
+    vertex_ids = labeled_sequence(vertices, key=False)
     edges = {(vertex_ids[t[0]], vertex_ids[t[1]]): v for t, v in edges.items()}
     g.add_vertices(len(vertices))
     g.add_edges(edges)
@@ -140,6 +144,7 @@ def create_domain_graph(db):
     attrs = {a: tuple(v.get(a, 0) for v in edges.values()) for a in attrs}
     for k, t in attrs.items():
         g.es[k] = t
+    log.info(f'|V| = {g.vcount()}; |E| = {g.ecount()}')
     return g
 
 

@@ -64,7 +64,7 @@ class CProfile:
         return item
 
 
-class FeedlyEntryExportPipeline:
+class CompressedStreamExportPipeline:
     def open_spider(self, spider):
         self.output_dir = spider.config['OUTPUT']
         self.stream = gzip.open(self.output_dir.joinpath('stream.jsonl.gz'), 'at', encoding='utf8')

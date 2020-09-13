@@ -22,11 +22,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Set as SetCollection
+from collections.abc import (Hashable, MutableMapping, MutableSequence,
+                             MutableSet)
+from collections.abc import Set as SetCollection
 from typing import Dict, Set, Tuple
 
 Keywords = Set[Hashable]
 KeywordCollection = Dict[Hashable, Hashable]
+
+
+def compose_mappings(*mappings):
+    base = {}
+    base.update(mappings[0])
+    for m in mappings[1:]:
+        for k, v in m.items():
+            if k in base and type(base[k]) is type(v):
+                if isinstance(v, MutableMapping):
+                    base[k] = compose_mappings(base[k], v)
+                elif isinstance(v, MutableSet):
+                    base[k] |= v
+                elif isinstance(v, MutableSequence):
+                    base[k].extend(v)
+                else:
+                    base[k] = v
+            else:
+                base[k] = v
+    return base
 
 
 class KeywordStore:
@@ -132,3 +153,14 @@ class KeywordStore:
 
     def for_json(self):
         return {item: self._taggings[hash_] for hash_, item in self._index.items()}
+
+
+def labeled_sequence(seq, key=True, zero_based=True, as_str=False):
+    r = range(len(seq)) if zero_based else range(1, len(seq) + 1)
+    if key:
+        z = zip(r, seq)
+    else:
+        z = zip(seq, r)
+    if as_str:
+        return {str(k): v for k, v in z}
+    return {k: v for k, v in z}

@@ -22,23 +22,20 @@
 
 from __future__ import annotations
 
-import click
 import logging
-import re
+import string
 import time
-from collections.abc import MutableMapping, MutableSequence, MutableSet
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from functools import wraps
 from hashlib import sha1
-from textwrap import dedent, indent
-from typing import Any, Dict, List, Tuple, Union
-from urllib.parse import SplitResult, urlsplit
+from typing import Any, Dict, List, Union
+from urllib.parse import urlsplit
 
 import simplejson as json
 from scrapy.http import TextResponse
 
 from .datastructures import KeywordCollection, KeywordStore
+from .urlkit import domain_parents, ensure_protocol, is_absolute_http
 
 JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONType']]
 JSONDict = Dict[str, JSONType]
@@ -48,35 +45,6 @@ log = logging.getLogger('feedly.utils')
 
 def parse_html(domstring, url='about:blank') -> TextResponse:
     return TextResponse(url=url, body=domstring, encoding='utf8')
-
-
-def is_http(u):
-    return isinstance(u, str) and urlsplit(u).scheme in {'http', 'https'}
-
-
-def is_absolute_http(u):
-    if not isinstance(u, str):
-        return False
-    s = urlsplit(u)
-    return s.scheme in {'http', 'https'} or s.scheme == '' and s.netloc
-
-
-def ensure_protocol(u, protocol='http'):
-    s = urlsplit(u)
-    return u if s.scheme else f'{protocol}:{u}'
-
-
-def domain_parents(domain: str) -> Tuple[str]:
-    parts = domain.split('.')
-    return tuple('.'.join(parts[-i:]) for i in range(len(parts), 1, -1))
-
-
-def no_scheme(url: SplitResult) -> str:
-    return url.geturl()[len(f'{url.scheme}:'):]
-
-
-def path_only(url: SplitResult) -> str:
-    return url.geturl()[len(f'{url.scheme}://{url.netloc}'):]
 
 
 def json_converters(value: Any) -> JSONType:
@@ -145,34 +113,30 @@ def guard_json(text: str) -> JSONDict:
         return {}
 
 
-def build_urls(base, templates):
-    parsed = urlsplit(base)
-    specifiers = {
-        **parsed._asdict(),
-        'network_path': no_scheme(parsed),
-        'path_query': path_only(parsed),
-        'original': parsed.geturl(),
-    }
-    return [t % specifiers for t in templates]
+PATH_UNSAFE = ''.join(set(string.punctuation + ' ') - set('-_/.'))
 
 
-def compose_mappings(*mappings):
-    base = {}
-    base.update(mappings[0])
-    for m in mappings[1:]:
-        for k, v in m.items():
-            if k in base and type(base[k]) is type(v):
-                if isinstance(v, MutableMapping):
-                    base[k] = compose_mappings(base[k], v)
-                elif isinstance(v, MutableSet):
-                    base[k] |= v
-                elif isinstance(v, MutableSequence):
-                    base[k].extend(v)
-                else:
-                    base[k] = v
-            else:
-                base[k] = v
-    return base
+def aggressive_replace_chars(s, encoding='latin_1'):
+    return s.encode(encoding, 'replace').decode(encoding, 'ignore')
+
+
+def replace_unsafe_chars(s, repl='-', chars=PATH_UNSAFE):
+    for c in chars:
+        if c in s:
+            s = s.replace(c, repl)
+    return s
+
+
+def pathsafe(s):
+    return replace_unsafe_chars(aggressive_replace_chars(s))
+
+
+SIMPLEJSON_KWARGS = {
+    'ensure_ascii': True,
+    'default': json_converters,
+    'for_json': True,
+    'iterable_as_array': True,
+}
 
 
 class HyperlinkStore(KeywordStore):
@@ -207,58 +171,3 @@ class HyperlinkStore(KeywordStore):
                 }
                 keywords['tag'].add(tag.xpath('name()').get())
                 self.put(url, **keywords, **kwargs)
-
-
-SIMPLEJSON_KWARGS = {
-    'ensure_ascii': True,
-    'default': json_converters,
-    'for_json': True,
-    'iterable_as_array': True,
-}
-
-
-def stylize(pattern, **styles):
-    def wrapper(func):
-        @wraps(func)
-        def wrapped(*args, **kwargs):
-            for s in func(*args, **kwargs):
-                yield re.sub(pattern, lambda m: click.style(m.group(1), **styles), s)
-        return wrapped
-    return wrapper
-
-
-def markdown_inline(func):
-    @stylize(re.compile(r'`(.*?)`'), fg='green')
-    @stylize(re.compile(r'_(.*?)_'), fg='blue', underline=True)
-    @stylize(re.compile(r'\*\*(.*?)\*\*'), fg='yellow', bold=True)
-    def f(*args, **kwargs):
-        yield from func(*args, **kwargs)
-    return f
-
-
-@markdown_inline
-def numpydoc2click(doc: str):
-    PARA = re.compile(r'((?:.+\n)+)')
-    PARA_WITH_HEADER = re.compile(r'(^ *)(.+)\n(?:\s*(?:-+|=+))\n((?:.+\n)+)')
-    paragraphs = list(reversed(PARA.findall(dedent(doc))))
-    yield paragraphs.pop()
-    while paragraphs:
-        p = paragraphs.pop()
-        match = PARA_WITH_HEADER.match(p)
-        if match:
-            indentation, header, p = match.group(1), match.group(2), match.group(3)
-            if not indentation:
-                header = header.upper()
-            yield indent(click.style(header, bold=True), indentation)
-            yield '\n'
-            yield indent(p, '    ')
-        else:
-            yield indent(p, '    ')
-        yield '\n'
-
-
-get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
-
-
-def get_help(ctx):
-    return next(get_help_gen(ctx))

@@ -13,7 +13,7 @@ FEED = 'https://xkcd.com/atom.xml'
 
 # Which part of the feed to download first: either `oldest` or `newest`
 DOWNLOAD_ORDER = 'oldest'
-# How much Feedly entries to download per API request. The minimum is 20 and the maximum is 1000.
+# How much Feedly entries to download per API request. The minimum is 1 and the maximum is 1000.
 DOWNLOAD_PER_BATCH = 1000
 
 # Whether or not to enable the search function
@@ -24,6 +24,13 @@ DOWNLOAD_PER_BATCH = 1000
 # a large number of search requests, and Feedly's Search API is a lot more sensitive to
 # high volume requests than its Streams API, meaning you may quickly run into rate-limiting issues.
 ENABLE_SEARCH = False
+
+# Whether or not to download and process the source webpage of a feed item.
+# If disabled, spider will only process HTML snippets returned by Feedly, which contain mostly article summaries
+# and sometimes images/videos, and will therefore only extract URLs from them.
+# If enabled, then in addition to that, spider will also download a copy of the webpage from the source website of the feed
+# which could contain many more hyperlinks, although the original webpage may not exist anymore.
+SCRAPE_SOURCE_PAGE = False
 
 # If you have a developer access token, you can provide it here.
 ACCESS_TOKEN = None

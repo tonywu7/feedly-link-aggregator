@@ -9,7 +9,7 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
-__version__ = '0.10'
+__version__ = '0.10.1'
 
 BOT_NAME = 'feedly'
 
@@ -77,7 +77,7 @@ EXTENSIONS = {
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
     'feedly.pipelines.ConfigLogging': 100,
-    'feedly.pipelines.FeedlyEntryExportPipeline': 900,
+    'feedly.pipelines.CompressedStreamExportPipeline': 900,
     # 'feedly.pipelines.StatsPipeline': 950,
     # 'feedly.pipelines.CProfile': 1000,
 }
@@ -88,7 +88,7 @@ LOGSTATS_INTERVAL = 60.0
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
 AUTOTHROTTLE_ENABLED = True
 # The initial download delay
-AUTOTHROTTLE_START_DELAY = 5
+AUTOTHROTTLE_START_DELAY = 0
 # The maximum download delay to be set in case of high latencies
 AUTOTHROTTLE_MAX_DELAY = 60
 # The average number of requests Scrapy should be sending in parallel to
