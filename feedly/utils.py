@@ -114,6 +114,28 @@ def guard_json(text: str) -> JSONDict:
         return {}
 
 
+def read_jsonlines(f, delimiter='\0\n', on_error='raise'):
+    i = 0
+    k = 0
+    next_line = f.readline()
+    while next_line:
+        i += 1
+        if next_line == delimiter:
+            k += 1
+            next_line = f.readline()
+            continue
+        try:
+            yield i, k, json.loads(next_line.rstrip())
+        except json.JSONDecodeError:
+            if on_error == 'raise':
+                raise
+            elif on_error == 'continue':
+                continue
+            else:
+                raise StopIteration
+        next_line = f.readline()
+
+
 PATH_UNSAFE = ''.join(set(string.punctuation + ' ') - set('-_/.'))
 
 

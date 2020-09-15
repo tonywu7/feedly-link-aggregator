@@ -154,7 +154,6 @@ def export(topic, exporter_args, **kwargs):
 @click.option('-p', 'preset')
 def debug_spider(spider, preset):
     settings = get_project_settings()
-    settings['AUTOTHROTTLE_ENABLED'] = False
     process = CrawlerProcess(settings)
     process.crawl(spider, preset=preset)
     process.start(stop_after_crawl=True)
@@ -163,10 +162,10 @@ def debug_spider(spider, preset):
 def numpydoc2click(doc: str):
     PARA = re.compile(r'((?:.+\n)+)')
     PARA_WITH_HEADER = re.compile(r'(^ *)(.+)\n(?:\s*(?:-+|=+))\n((?:.+\n)+)')
-    paragraphs = list(reversed(PARA.findall(dedent(doc))))
-    yield paragraphs.pop()
-    while paragraphs:
-        p = paragraphs.pop()
+    paragraphs = list(PARA.findall(dedent(doc)))
+    yield paragraphs[0]
+    for i in range(1, len(paragraphs)):
+        p = paragraphs[i]
         match = PARA_WITH_HEADER.match(p)
         if match:
             indentation, header, p = match.group(1), match.group(2), match.group(3)
@@ -174,7 +173,5 @@ def numpydoc2click(doc: str):
                 header = header.upper()
             yield indent(click.style(header, bold=True), indentation)
             yield '\n'
-            yield indent(p, '    ')
-        else:
-            yield indent(p, '    ')
+        yield indent(p, '    ')
         yield '\n'

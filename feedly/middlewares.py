@@ -20,18 +20,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import gzip
 import logging
+import os
+import pickle
+from concurrent.futures.thread import ThreadPoolExecutor
+from contextlib import suppress
 from typing import Callable, List
 
 from scrapy import Spider
 from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
+from scrapy.signals import request_dropped, request_scheduled, spider_closed
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
 
 from . import feedly
-from .utils import guard_json, wait
+from .requests import ProbeRequest
+from .utils import guard_json, wait, watch_for_timing
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
@@ -52,15 +59,6 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
         return other_items
 
 
-def filter_depth(request: Request, spider: Spider):
-    depth = request.meta.get('depth')
-    max_depth = spider.config['DEPTH_LIMIT']
-    if depth is not None and max_depth is not None:
-        if depth > max_depth:
-            return False
-    return True
-
-
 def filter_domains(request: Request, spider: Spider):
     domains = spider.config['FOLLOW_DOMAINS']
     feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
@@ -69,13 +67,13 @@ def filter_domains(request: Request, spider: Spider):
     return url_is_from_any_domain(feed_url, domains)
 
 
-class FeedlyScanDownloaderMiddleware:
-    async def process_request(self, request: Request, spider):
-        meta = request.meta
-        if 'try_feeds' not in meta:
+class FeedProbingDownloaderMiddleware:
+    async def process_request(self, request: ProbeRequest, spider):
+        if not isinstance(request, ProbeRequest):
             return
 
         prefix = spider.config['STREAM_ID_PREFIX']
+        meta = request.meta
         feeds = meta['try_feeds']
         query = meta['search_query']
         valid_feeds = []
@@ -105,6 +103,99 @@ class FeedlyScanDownloaderMiddleware:
         if meta.get('inc_depth'):
             meta['depth'] -= 1
         return Response(url=request.url, request=request)
+
+
+class RequestPersistenceDownloaderMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        instance = cls()
+        crawler.signals.connect(instance.eager_process, request_scheduled)
+        crawler.signals.connect(instance._remove_request, request_dropped)
+        crawler.signals.connect(instance._close, spider_closed)
+        return instance
+
+    def __init__(self):
+        self.requests = {}
+        self.logger = logging.getLogger('feedly.persistence')
+        self.executor = ThreadPoolExecutor(1, 'feedly.persistence-fileops')
+        self.future = None
+        self.initialized = False
+
+    def init(self, spider):
+        path = spider.config['OUTPUT'].joinpath('requests.pickle.gz')
+        if path.exists():
+            with gzip.open(path, 'rb') as f, suppress(EOFError):
+                self.requests = pickle.load(f)
+        self.frequests = path
+        self.initialized = True
+
+    def eager_process(self, request, spider):
+        with suppress(IgnoreRequest):
+            self.process_request(request, spider, True)
+
+    def process_request(self, request: Request, spider, idempotent=False):
+        if not self.initialized:
+            self.init(spider)
+
+        meta = request.meta
+        action = meta.get('_persist', None)
+        if not action:
+            if 'null.io' in request.url:
+                raise ValueError
+            return
+
+        if action == 'release' and not idempotent:
+            meta['_requests'] = {**self.requests}
+            if self.requests:
+                self.logger.info(f'Resuming crawl with {len(self.requests)} request(s)')
+            del meta['_persist']
+            return Response(url=request.url, request=request)
+        if action == 'add':
+            self._add_request(request)
+            self._dump_requests()
+            if not idempotent:
+                del meta['_persist']
+            return
+        if action == 'remove':
+            self._remove_request(request)
+            self._dump_requests()
+            raise IgnoreRequest()
+
+    def _add_request(self, request: Request):
+        self.requests[request.meta['pkey']] = (
+            request.__class__, {
+                'url': request.url,
+                'method': request.method,
+                'callback': request.callback.__name__,
+                'meta': {**request.meta},
+                'priority': request.priority,
+            },
+        )
+
+    def _remove_request(self, request: Request, spider=None):
+        if 'pkey' not in request.meta:
+            return
+        self.requests.pop(request.meta['pkey'], None)
+
+    def _dump_requests(self):
+        with watch_for_timing('Creating future', 0.05):
+            if self.future:
+                self.future.cancel()
+            self.future = self.executor.submit(self._write)
+
+    def _write(self):
+        with gzip.open(self.frequests, 'wb') as f:
+            pickle.dump(self.requests, f)
+
+    def _close(self, spider, reason: str):
+        if reason == 'finished':
+            self.executor.shutdown(True)
+            with suppress(OSError):
+                os.remove(self.frequests)
+            return
+        self.logger.info(f'# of requests persisted to filesystem: {len(self.requests)}')
+        self._dump_requests()
+        self.executor.shutdown(True)
 
 
 class RequestFilterDownloaderMiddleware:
