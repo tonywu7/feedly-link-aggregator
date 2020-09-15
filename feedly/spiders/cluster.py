@@ -28,6 +28,7 @@ from scrapy.http import Request, TextResponse
 
 from ..datastructures import compose_mappings
 from ..feedly import FeedlyEntry
+from ..requests import FinishedRequest
 from ..utils import HyperlinkStore, SpiderOutput
 from .base import FeedlyRSSSpider
 
@@ -88,6 +89,8 @@ class ExplorationSpiderMiddleware:
         depth = response.meta.get('depth', 0)
         self.stats.max_value('cluster/5_maxdepth', depth)
         for data in result:
+            if isinstance(data, FinishedRequest):
+                self.update_finished(data)
             if isinstance(data, Request):
                 yield data
                 continue
@@ -96,8 +99,6 @@ class ExplorationSpiderMiddleware:
                 store = data['urls']
                 self.stats.inc_value('rss/page_count')
                 yield from self.process_item(response, item, store, depth, spider)
-            if data.get('_persist') == 'finished':
-                self.update_finished(data['request'])
             yield data
 
     def process_item(
@@ -115,7 +116,7 @@ class ExplorationSpiderMiddleware:
 
         for url in sites:
             self.logger.debug(f'{url} (depth={depth})')
-            yield spider.locate_feed_url(
+            yield spider.probe_feed(
                 url, meta={
                     'inc_depth': True,
                     'depth': depth,
@@ -130,7 +131,9 @@ class ExplorationSpiderMiddleware:
         self.update_ratio()
 
     def update_finished(self, request: Request):
-        feed_url = request.meta['feed_url']
+        feed_url = request.meta.get('feed_url')
+        if not feed_url:
+            return
         self._finished.add(urlsplit(feed_url).netloc)
         self.stats.set_value('cluster/3_finished_nodes', len(self._finished))
         self.update_ratio()

@@ -154,8 +154,9 @@ Description
 -----------
 This exporter lets you select and export URLs found in scraped data.
 
-By default, it exports all URLs found in scraped HTML markups. This can be
-changed by specifying the **key=** additional option (see below).
+By default, it exports all URLs found in scraped HTML markups. You can export
+other data such as dates or domain names by specifying the **key=** additional
+option (see below).
 
 If there already exist some exported data, running this exporter again will
 append to existing data.
@@ -195,12 +196,12 @@ in addition to the exporter options:
 
 Output Template
 ---------------
-In stead of specifying a regular path for the **-o/--output** option, you may
+Instead of specifying a regular path for the **-o/--output** option, you may
 also specify a naming template. This allows you to sort URLs to different files
 based on some varying attributes such as domain name.
 
 Templates are specified as Python %-format strings with named placeholders e.g.
-`%(target:netloc)s.txt`. You can also use any modifier Python that supports,
+`%(target:netloc)s.txt`. You can also use any modifier that Python supports,
 such as `%(target:url).10s.txt`.
 
     Examples
@@ -301,7 +302,7 @@ Each attribute is in the form of either _object_ or _object:key_.
         **Keys**: For each kind of URL object, the following keys are available:
 
             _url_: The complete URL.
-            _scheme_: The protocol of the URL e.g. `http` or `https`.
+            _scheme_: The protocol of the URL e.g. `http` and `https`.
             _netloc_: The domain name of the URL e.g. `example.org`.
             _path_: The path of the URL, with the beginning slash.
             _query_: Query string of the URL without `?`, if any

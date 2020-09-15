@@ -155,8 +155,8 @@ class KeywordStore:
         return {item: self._taggings[hash_] for hash_, item in self._index.items()}
 
 
-def labeled_sequence(seq, key=True, zero_based=True, as_str=False):
-    r = range(len(seq)) if zero_based else range(1, len(seq) + 1)
+def labeled_sequence(seq, key=True, start=0, as_str=False):
+    r = range(start, len(seq) + start)
     if key:
         z = zip(r, seq)
     else:

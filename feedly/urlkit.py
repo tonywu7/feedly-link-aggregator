@@ -77,6 +77,6 @@ def build_urls(base, match, templates):
         'path_query': path_only(parsed),
         'original': parsed.geturl(),
         **match.groupdict(),
-        **labeled_sequence(match.groups(), zero_based=False, as_str=True),
+        **labeled_sequence(match.groups(), start=1, as_str=True),
     }
     return [t % specifiers for t in templates]
