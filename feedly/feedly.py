@@ -116,17 +116,11 @@ class FeedlyEntry:
 
     @staticmethod
     def _set_markup(entry, item):
-        for k in {'content', 'summary'}:
-            content = item.get(k)
-            if content:
-                content = content.get('content')
-            if content:
-                entry.markup[k] = content
-        visual = item.get('visual')
-        if visual:
-            u = visual.get('url')
-            if not utils.falsy(u):
-                entry.markup['visual'] = f'<img src="{u}">'
+        content = item.get('content', item.get('summary'))
+        if content:
+            content = content.get('content')
+        if content:
+            entry.markup['summary'] = content
 
     @staticmethod
     def _filter_attrib(attrib: attr.Attribute, value: Any) -> bool:

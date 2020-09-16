@@ -65,6 +65,11 @@ class URL(Base):
         return (Index(None, 'id', 'url'),)
 
 
+class Keyword(Base):
+    id = Column(types.Integer(), primary_key=True, autoincrement=True)
+    keyword = Column(types.String(), unique=True, nullable=False)
+
+
 class Item(Base):
     id = Column(types.Integer(), primary_key=True, autoincrement=True)
     hash = Column(types.String(length=40), unique=True, nullable=False)
@@ -83,14 +88,15 @@ class Item(Base):
         return (Index(None, 'id', 'hash'),)
 
 
+class Hyperlink(Base):
+    source_id = Column(ForeignKey('url.id'), primary_key=True)
+    target_id = Column(ForeignKey('url.id'), primary_key=True)
+    element = Column(types.String(), nullable=False)
+
+
 class Feed(Base):
     url_id = Column(ForeignKey('url.id'), primary_key=True)
     title = Column(types.Text(), nullable=False)
-
-
-class Keyword(Base):
-    id = Column(types.Integer(), primary_key=True, autoincrement=True)
-    keyword = Column(types.String(), unique=True, nullable=False)
 
 
 class Tagging(Base):
@@ -98,21 +104,14 @@ class Tagging(Base):
     keyword_id = Column(ForeignKey('keyword.id'), primary_key=True)
 
 
-class Markup(Base):
-    id = Column(types.Integer(), primary_key=True, autoincrement=True)
-    item_id = Column(ForeignKey('item.id'), nullable=False)
-    type = Column(types.String(), nullable=False)
+class Summary(Base):
+    url_id = Column(ForeignKey('url.id'), primary_key=True)
     markup = Column(types.Text(), nullable=False)
 
-    @declared_attr
-    def __table_args__(self):
-        return (Index(None, 'item_id', 'type', unique=True),)
 
-
-class Hyperlink(Base):
-    source_id = Column(ForeignKey('url.id'), primary_key=True)
-    target_id = Column(ForeignKey('url.id'), primary_key=True)
-    element = Column(types.String(), nullable=False)
+class Webpage(Base):
+    url_id = Column(ForeignKey('url.id'), primary_key=True)
+    markup = Column(types.Text(), nullable=False)
 
 
 models = [m for m in Base._decl_class_registry.values() if isinstance(m, type) and issubclass(m, Base)]
@@ -120,11 +119,11 @@ tables = {m.__tablename__: m.__table__ for m in models}
 
 
 def inspect_identity(table):
-    config = {}
+    config = {'columns': []}
     for name, column in table.columns.items():
+        config['columns'].append(name)
         if column.autoincrement is True:
             config['autoincrement'] = (name,)
-            break
     for constraint in table.constraints:
         cols = tuple(sorted(c.name for c in constraint.columns))
         if isinstance(constraint, PrimaryKeyConstraint):
@@ -137,6 +136,12 @@ def inspect_identity(table):
             cols = tuple(sorted(c.name for c in index.columns))
             s = config.setdefault('unique', set())
             s.add(cols)
+    fks = []
+    for constraint in table.foreign_key_constraints:
+        column = constraint.column_keys[0]
+        foreign_column = list(constraint.columns[column].foreign_keys)[0].column
+        fks.append((column, foreign_column.table.name, foreign_column.name))
+    config['foreign_keys'] = fks
     return config
 
 

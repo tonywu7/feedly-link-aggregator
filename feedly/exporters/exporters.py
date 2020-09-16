@@ -84,7 +84,7 @@ class MappingExporter(ABC):
 
 
 class MappingJSONExporter(MappingExporter):
-    def __init__(self, key: Set[str], *args, **kwargs):
+    def __init__(self, key: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.key = key
         self.storage = {}

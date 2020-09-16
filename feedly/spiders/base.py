@@ -25,7 +25,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sqlite3
 import time
 from abc import ABC, abstractmethod
 from contextlib import suppress
@@ -35,7 +34,6 @@ from pprint import pformat
 from typing import Union
 from urllib.parse import unquote
 
-import simplejson as json
 from scrapy import Spider
 from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
@@ -44,15 +42,15 @@ from twisted.python.failure import Failure
 from .. import feedly
 from ..config import Config
 from ..feedly import FeedlyEntry
+from ..pipelines import NULL_TERMINATE
 from ..requests import (FinishedRequest, ProbeRequest, ResumeRequest,
                         reconstruct_request)
-from ..sql import SCHEMA_VERSION
-from ..sql import utils as db_utils
+from ..sql.stream import consume_stream
+from ..sql.utils import DBVersionError
 from ..urlkit import build_urls, select_templates
-from ..utils import (HyperlinkStore, JSONDict, SpiderOutput, guard_json,
-                     read_jsonlines)
-
-log = logging.getLogger('feedly.spiders')
+from ..utils import HyperlinkStore, JSONDict, SpiderOutput
+from ..utils import colored as _
+from ..utils import guard_json
 
 
 class FeedlyRSSSpider(Spider, ABC):
@@ -81,9 +79,11 @@ class FeedlyRSSSpider(Spider, ABC):
 
         STREAM_ID_PREFIX = 'feed/'
 
+        DATABASE_CACHE_SIZE = 100000
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
-        spider = super().from_crawler(crawler, *args, **kwargs)
+        spider: FeedlyRSSSpider = super().from_crawler(crawler, *args, **kwargs)
         spider.stats = crawler.stats
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
@@ -160,7 +160,7 @@ class FeedlyRSSSpider(Spider, ABC):
                 self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
                 self.logger.critical('No feed to crawl!')
 
-        yield FinishedRequest(meta=meta)
+        yield FinishedRequest(meta={**meta})
         for feed in feeds:
             yield self.next_page({'id': feed}, meta=meta, initial=True)
 
@@ -211,7 +211,7 @@ class FeedlyRSSSpider(Spider, ABC):
         if items:
             response.meta['valid_feed'] = True
             if response.meta.get('reason') != 'continuation':
-                self.logger.info(f'Got new RSS feed at {source}')
+                self.logger.info(_(f'Got new RSS feed at {source}', color='green'))
 
         for item in items:
             entry = FeedlyEntry.from_upstream(item)
@@ -236,129 +236,21 @@ class FeedlyRSSSpider(Spider, ABC):
         yield self.next_page(data, response=response)
 
     def digest_feed_export(self, stream):
-        self.logger.info('Digesting scraped data, this may take a while...')
-
-        conn = sqlite3.connect(self.config['OUTPUT'].joinpath('index.db'))
-
-        db_utils.create_all(conn)
-        db_utils.verify_version(conn, SCHEMA_VERSION)
-        identity_conf = db_utils.load_identity_config()
-
-        tables = ('item', 'keyword', 'markup', 'url')
-        max_row = db_utils.select_max_rowids(conn, tables)
-
-        def autoinc(table, staged):
-            return range(max_row[table], max_row[table] + len(staged))
-
-        def bulk_op(statement, values):
-            try:
-                with conn:
-                    conn.executemany(statement, values)
-            except sqlite3.OperationalError as e:
-                self.logger.error(e, exc_info=True)
-                self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
-                self.logger.error('(Move the existing file somewhere else.)')
-                self.logger.error('(Unprocessed scraped data remain in `stream.jsonl`)')
-                raise
-
-        identities = {}
-        for table, conf in identity_conf.items():
-            identities[table] = db_utils.select_identity(conn, table, conf)
-
-        self.logger.info('Existing records:')
-        for name, rows in identities.items():
-            if name[0] != '_':
-                self.logger.info(f'  {name}: {len(rows)}')
-
-        ids_url = identities['url']
-        ids_item = identities['item']
-        ids_keyword = identities['keyword']
-
-        hyperlinks = {}
-        items = {}
-        feeds = {}
-        markup = {}
-        taggings = []
-
-        self.logger.info('Reading item stream...')
         try:
-            for i, data in read_jsonlines(stream):
-                data: JSONDict
-                rowtype = data.pop('__', '')
-
-                if rowtype == 'url':
-                    id_ = ((data['url'],),)
-                    ids_url.setdefault(id_, None)
-                if rowtype == 'keyword':
-                    id_ = ((data['keyword'],),)
-                    ids_keyword.setdefault(id_, None)
-                if rowtype == 'item':
-                    id_ = ((data['hash'],),)
-                    ids_item.setdefault(id_, None)
-                    items[id_] = data
-                if rowtype == 'hyperlink':
-                    hyperlinks[(data['source_id'], data['target_id'])] = data
-                if rowtype == 'feed':
-                    feeds[data['url_id']] = data
-                if rowtype == 'markup':
-                    markup[(data['item_id'], data['type'])] = data
-                if rowtype == 'tagging':
-                    taggings.append(data)
-
-        except json.JSONDecodeError as e:
-            self.logger.error(e)
-            self.logger.error(f'Corrupted data on line {i} in stream. Aborting!')
-            return
-
-        staged = [u for u, i in ids_url.items() if i is None]
-        staged = {u: i for i, u in zip(autoinc('url', staged), staged)}
-        ids_url.update(staged)
-        staged = [(u[0][0], i) for u, i in staged.items()]
-        self.logger.info(f'New URLs: {len(staged)}')
-        bulk_op('INSERT INTO url (url, id) VALUES (?, ?)', staged)
-
-        staged = [k for k, i in ids_keyword.items() if i is None]
-        staged = {k: i for i, k in zip(autoinc('keyword', staged), staged)}
-        ids_keyword.update(staged)
-        staged = [(k[0][0], i) for k, i in staged.items()]
-        bulk_op('INSERT INTO keyword (keyword, id) VALUES (?, ?)', staged)
-
-        staged = [f for f, i in ids_item.items() if i is None]
-        staged = {f: items[f] for f in staged}
-        for i, item in zip(autoinc('item', staged), staged.values()):
-            item['id'] = i
-            item['url'] = ids_url[((item['url'],),)]
-            item['source'] = ids_url[((item['source'],),)]
-        ids_item.update({k: v['id'] for k, v in staged.items()})
-        self.logger.info(f'New pages: {len(staged)}')
-        bulk_op(
-            'INSERT INTO item (id, hash, url, source, author, title, published, updated, crawled)'
-            'VALUES (:id, :hash, :url, :source, :author, :title, :published, :updated, :crawled)',
-            staged.values(),
-        )
-
-        staged = {(ids_url[((p[0],),)], ids_url[((p[1],),)]): t for p, t in hyperlinks.items()}
-        staged = {p: t for p, t in staged.items() if p not in identities['hyperlink']}
-        staged = [(p[0], p[1], t['element']) for p, t in staged.items()]
-        self.logger.info(f'New hyperlinks: {len(staged)}')
-        bulk_op('INSERT INTO hyperlink (source_id, target_id, element) VALUES (?, ?, ?)', staged)
-
-        staged = {ids_url[((k,),)]: v.get('title', '') for k, v in feeds.items()}
-        staged = {k: v for k, v in staged.items() if (k,) not in identities['feed']}
-        staged = [(u, t) for u, t in staged.items()]
-        self.logger.info(f'New feed sources: {len(staged)}')
-        bulk_op('INSERT INTO feed (url_id, title) VALUES (?, ?)', staged)
-
-        staged = {(ids_item[((k[0],),)], k[1]): v for k, v in markup.items()}
-        staged = {k: v for k, v in staged.items() if (k,) not in identities['markup']}
-        staged = [(k[0], k[1], v['markup']) for k, v in staged.items()]
-        bulk_op('INSERT INTO markup (item_id, type, markup) VALUES (?, ?, ?)', staged)
-
-        staged = [(ids_item[((t['item_id'],),)], ids_keyword[((t['keyword_id'],),)]) for t in taggings]
-        staged = {t for t in staged if t not in identities['tagging']}
-        bulk_op('INSERT INTO tagging (item_id, keyword_id) VALUES (?, ?)', staged)
-
-        conn.close()
+            self.logger.info('Digesting scraped data, this may take a while...')
+            self.logger.info(_('Avoid sending interruptions as it may lead to database corruption.', color='yellow'))
+            self.logger.info('Reading item stream...')
+            consume_stream(self.config['OUTPUT'].joinpath('index.db'), stream, self.config.getint('DATABASE_CACHE_SIZE', 100000))
+        except DBVersionError as e:
+            self.logger.warn(e)
+            self.logger.warn('Cannot write to the existing database because it uses another schema version.')
+            self.logger.info(_('Run `python -m feedly upgrade-db` to upgrade it to the current version', color='cyan'))
+            self.logger.info(_('Then run `python -m feedly consume-leftovers` to read unsaved scraped data', color='cyan'))
+        except Exception as e:
+            self.logger.error(e, exc_info=True)
+            self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
+            self.logger.error('(Unprocessed scraped data remain in `stream.jsonl.gz`)')
+            raise
 
 
 class FetchSourceSpiderMiddleware:
@@ -398,7 +290,7 @@ class FetchSourceSpiderMiddleware:
                 self.logger.debug(f'Dropping {response}')
                 raise AttributeError
             body = response.text
-            item.markup['original'] = body
+            item.markup['webpage'] = body
             store.parse_html(item.url, body)
         yield data
 
@@ -439,10 +331,30 @@ class SQLExporterSpiderMiddleware:
                 yield data
                 continue
             item: FeedlyEntry = data['item']
-            urls: HyperlinkStore = data['urls']
+            store: HyperlinkStore = data['urls']
 
-            yield {
-                '__': 'item',
+            urls = []
+            keywords = []
+            items = []
+            hyperlinks = []
+            feeds = []
+            taggings = []
+
+            src = item.url
+            urls.append({'url': src})
+            for u, kws in store.items():
+                urls.append({'url': u})
+                hyperlinks.append({'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]})
+
+            for k in item.keywords:
+                keywords.append({'keyword': k})
+                taggings.append({'item_id': item.id_hash, 'keyword_id': k})
+
+            feed = item.source['feed']
+            urls.append({'url': feed})
+            feeds.append({'url_id': feed, 'title': item.source.get('title', '')})
+
+            items.append({
                 'hash': item.id_hash,
                 'url': item.url,
                 'source': item.source['feed'],
@@ -451,21 +363,19 @@ class SQLExporterSpiderMiddleware:
                 'published': item.published.isoformat(),
                 'updated': item.updated.isoformat() if item.updated else None,
                 'crawled': data['time_crawled'],
+            })
+
+            group = {
+                'url': urls,
+                'keyword': keywords,
+                'item': items,
+                'hyperlink': hyperlinks,
+                'feed': feeds,
+                'tagging': taggings,
             }
+            if item.markup:
+                for k, v in item.markup.items():
+                    group[k] = [{'url_id': src, 'markup': v}]
 
-            src = item.url
-            yield {'__': 'url', 'url': src}
-            for u, kws in urls.items():
-                yield {'__': 'url', 'url': u}
-                yield {'__': 'hyperlink', 'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]}
-
-            for k in item.keywords:
-                yield {'__': 'keyword', 'keyword': k}
-                yield {'__': 'tagging', 'item_id': item.id_hash, 'keyword_id': k}
-
-            feed = item.source['feed']
-            yield {'__': 'url', 'url': feed}
-            yield {'__': 'feed', 'url_id': feed, 'title': item.source.get('title', '')}
-
-            for t, m in item.markup.items():
-                yield {'__': 'markup', 'item_id': item.id_hash, 'type': t, 'markup': m}
+            yield group
+            yield NULL_TERMINATE

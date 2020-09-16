@@ -28,7 +28,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha1
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Set, TypeVar, Union
 from urllib.parse import urlsplit
 
 import simplejson as json
@@ -36,6 +36,12 @@ from scrapy.http import Request, TextResponse
 
 from .datastructures import KeywordCollection, KeywordStore
 from .urlkit import domain_parents, ensure_protocol, is_absolute_http
+
+try:
+    from termcolor import colored
+except ImportError:
+    def colored(t, *args, **kwargs):
+        return t
 
 JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONType']]
 JSONDict = Dict[str, JSONType]
@@ -114,18 +120,26 @@ def guard_json(text: str) -> JSONDict:
         return {}
 
 
-def read_jsonlines(f, delimiter='\0\n', on_error='raise'):
+def read_jsonlines(f, *, delimiter='\0\n', on_error='raise', paginate=100000, on_paginate=None):
     i = 0
     k = 0
+    p = paginate - 1
+
     next_line = f.readline()
     while next_line:
         i += 1
+
         if next_line == delimiter:
             k += 1
             next_line = f.readline()
+            if paginate and k == p:
+                p += paginate
+                yield i, k, on_paginate
             continue
+
         try:
             yield i, k, json.loads(next_line.rstrip())
+
         except json.JSONDecodeError:
             if on_error == 'raise':
                 raise
@@ -133,6 +147,7 @@ def read_jsonlines(f, delimiter='\0\n', on_error='raise'):
                 continue
             else:
                 raise StopIteration
+
         next_line = f.readline()
 
 
@@ -194,3 +209,27 @@ class HyperlinkStore(KeywordStore):
                 }
                 keywords['tag'].add(tag.xpath('name()').get())
                 self.put(url, **keywords, **kwargs)
+
+
+T = TypeVar('T')
+
+
+def findpath(start: T, dest: T, segments: Dict[T, Set[T]], path: List[T]) -> bool:
+    path.append(start)
+
+    if start not in segments:
+        path.pop()
+        return False
+
+    next_routes = segments.get(start, set()) - set(path)
+    if dest in next_routes:
+        path.append(dest)
+        return True
+
+    for r in next_routes:
+        found = findpath(r, dest, segments, path)
+        if found:
+            return found
+
+    path.pop()
+    return False

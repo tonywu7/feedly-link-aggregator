@@ -20,10 +20,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-
+import gzip
+import os
 import re
 from functools import wraps
 from importlib import import_module
+from pathlib import Path
 from textwrap import dedent, indent
 
 import click
@@ -31,6 +33,8 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
+from .sql.stream import consume_stream
+from .sql.utils import migrate
 
 
 def stylize(pattern, **styles):
@@ -52,10 +56,8 @@ def markdown_inline(func):
     return f
 
 
-get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
-
-
 def get_help(ctx):
+    get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
     return next(get_help_gen(ctx))
 
 
@@ -149,14 +151,43 @@ def export(topic, exporter_args, **kwargs):
     topic.export(**kwargs, **options)
 
 
-@cli.command()
+# @cli.command()
 @click.option('-s', 'spider')
 @click.option('-p', 'preset')
-def debug_spider(spider, preset):
+def debug_spider(spider, preset, **kwargs):
     settings = get_project_settings()
     process = CrawlerProcess(settings)
     process.crawl(spider, preset=preset)
     process.start(stop_after_crawl=True)
+
+
+@cli.command()
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+              help='Path to the directory containing scraped data.')
+@click.option('-d', 'delete', is_flag=True,
+              help='Delete leftovers after finished.')
+@click.option('-s', '--cache-size', 'size', type=click.INT, default=100000)
+def consume_leftovers(wd, delete, size):
+    """Persist all leftover data (`stream.jsonl.gz`) to the database."""
+    wd = Path(wd)
+    db_path = wd.joinpath('index.db')
+    for f in os.listdir(wd):
+        if f[:15] == 'stream.jsonl.gz':
+            streamf = wd.joinpath(f)
+            print(f'Reading {streamf}')
+            with gzip.open(streamf, 'rt') as stream:
+                consume_stream(db_path, stream, size)
+            if delete:
+                os.remove(streamf)
+
+
+@cli.command()
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+              help='Path to the directory containing scraped data.')
+def upgrade_db(wd):
+    """Upgrade an older database to the latest schema version."""
+    db_path = Path(wd).joinpath('index.db')
+    migrate(db_path)
 
 
 def numpydoc2click(doc: str):

@@ -38,6 +38,7 @@ from twisted.internet.defer import DeferredList
 
 from . import feedly
 from .requests import ProbeRequest
+from .utils import colored as _
 from .utils import guard_json, wait, watch_for_timing
 
 
@@ -122,6 +123,7 @@ class RequestPersistenceDownloaderMiddleware:
         self.initialized = False
 
     def init(self, spider):
+        self.requests['_feed'] = spider.config['FEED']
         path = spider.config['OUTPUT'].joinpath('requests.pickle.gz')
         if path.exists():
             with gzip.open(path, 'rb') as f, suppress(EOFError):
@@ -145,11 +147,7 @@ class RequestPersistenceDownloaderMiddleware:
             return
 
         if action == 'release' and not idempotent:
-            meta['_requests'] = {**self.requests}
-            if self.requests:
-                self.logger.info(f'Resuming crawl with {len(self.requests)} request(s)')
-            del meta['_persist']
-            return Response(url=request.url, request=request)
+            return self._continue(meta, request, spider)
         if action == 'add':
             self._add_request(request)
             self._dump_requests()
@@ -160,6 +158,33 @@ class RequestPersistenceDownloaderMiddleware:
             self._remove_request(request)
             self._dump_requests()
             raise IgnoreRequest()
+
+    def _continue(self, meta, request, spider):
+        meta['_requests'] = {**self.requests}
+        resume_feed = meta['_requests'].pop('_feed', '')
+        action = 'x'
+        if '_feed' in self.requests and len(self.requests) > 1 or self.requests:
+            feed = spider.config['FEED']
+            if feed == resume_feed:
+                action = 'c'
+            else:
+                self.logger.info(_(f'Found unfinished crawl with {len(self.requests)} pending request(s)', color='cyan'))
+                self.logger.info(_(f'Continue crawling {resume_feed}?', color='cyan'))
+                self.logger.info(_(f"Start new crawl with '{spider.config['FEED']}'?", color='cyan'))
+                self.logger.info(_('Or exit?', color='cyan'))
+                action = 'x'
+            while action not in 'cse':
+                action = input('(continue/start/exit) [c]: ')[:1]
+            if action == 'e':
+                spider.crawler.engine.close_spider(spider, 'exit')
+                raise IgnoreRequest()
+            elif action == 's':
+                meta['_requests'] = {}
+                self.requests['_feed'] = feed
+            else:
+                self.logger.info(_(f'Resuming crawl with {len(self.requests)} request(s)', color='cyan'))
+        del meta['_persist']
+        return Response(url=request.url, request=request)
 
     def _add_request(self, request: Request):
         self.requests[request.meta['pkey']] = (
@@ -193,7 +218,8 @@ class RequestPersistenceDownloaderMiddleware:
             with suppress(OSError):
                 os.remove(self.frequests)
             return
-        self.logger.info(f'# of requests persisted to filesystem: {len(self.requests)}')
+        if len(self.requests):
+            self.logger.info(_(f'# of requests persisted to filesystem: {len(self.requests)}', color='cyan'))
         self._dump_requests()
         self.executor.shutdown(True)
 
