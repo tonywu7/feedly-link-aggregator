@@ -105,15 +105,12 @@ def migrate(db_path, version=SCHEMA_VERSION):
     log.info(_('Done.', color='green'))
 
 
-def select_max_rowids(conn, tables):
-    max_row = {}
-    for table in tables:
-        row = conn.execute(f'SELECT max(id) FROM {table}').fetchone()
-        if row is None:
-            row = [None]
-        max_id = row[0] or 0
-        max_row[table] = max_id + 1
-    return max_row
+def select_max_rowid(conn, table):
+    row = conn.execute(f'SELECT max(rowid) FROM {table}').fetchone()
+    if row is None:
+        row = [None]
+    max_id = row[0] or 0
+    return max_id
 
 
 def bulk_fetch(cur, size=100000, log=None):

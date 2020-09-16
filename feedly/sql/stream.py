@@ -29,7 +29,7 @@ from ..utils import colored as _
 from ..utils import read_jsonlines
 from . import SCHEMA_VERSION
 from .identity import load_identity_config
-from .utils import create_all, verify_version
+from .utils import create_all, select_max_rowid, verify_version
 
 log = logging.getLogger('feedly.db.streamreader')
 
@@ -107,12 +107,14 @@ def consume_stream(db_path, stream, batch_count):
         for table in TABLES:
             consumer = consumers.pop(table)
             insert = inserts[table]
+
             select_identity = ident_funcs[table][0]
+            rowid = select_max_rowid(conn, table)
 
             values = next(consumer)
             with conn:
                 conn.executemany(insert, values)
-            identity_keys[table] = select_identity(conn)
+            identity_keys[table].update(select_identity(conn, rowid))
 
             num_records += len(values)
             log.info(f'  {table}: {len(identity_keys[table])} (+{len(values)})')
