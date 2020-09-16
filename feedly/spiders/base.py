@@ -238,7 +238,7 @@ class FeedlyRSSSpider(Spider, ABC):
     def digest_feed_export(self, stream):
         try:
             self.logger.info('Digesting scraped data, this may take a while...')
-            self.logger.info(_('Avoid sending interruptions as it may lead to database corruption.', color='yellow'))
+            self.logger.info('Avoid sending interruptions as it may lead to database corruption.')
             self.logger.info('Reading item stream...')
             consume_stream(self.config['OUTPUT'].joinpath('index.db'), stream, self.config.getint('DATABASE_CACHE_SIZE', 100000))
         except DBVersionError as e:

@@ -54,8 +54,6 @@ where `<dir>` is the same directory.
 
 ## Documentation
 
-**![#f03c15](https://placehold.it/12/f06073/000000?text=+) This version (v0.10.1) has command syntax that is different from previous versions.**
-
 ### Crawling
 
 ```bash
@@ -241,14 +239,15 @@ Cluster spider works best for sites that have predefined endpoints for RSS feeds
 
 - **v0.10.3**
     - _Optimization:_ Persisting data to database now requires less memory (with a slight time trade-off).
-    - ![#e5c07b](https://placehold.it/12/e5c07b/000000?text=+) This version introduces database schema changes.
+    - ![#e5c07b](https://placehold.it/12/e5c07b/000000?text=+) This version introduces database schema changes. Database from
+    v0.10.1 onwards can be upgraded to this version.
 - **v0.10.2**
     - _Cluster spider algorithm:_ Cluster spider now do breadth-first crawls, meaning it will crawl feeds closer to the starting feed
     to completion before crawling feeds that are further away.
     - _Persistence:_ Now uses pickle to persist request to achieve more accurate resumption.
 - **v0.10.1**
     - **![#f06073](https://placehold.it/12/f06073/000000?text=+) This version introduces API-breaking changes.**
-    - _Command change:_ The commands for both crawling and exporting has changed. See the following two sections for details.
+    - _Command change:_ The commands for both crawling and exporting has changed. See the above sections for details.
     - _Output:_
         - All spiders now require the output path be an available directory.
         - All spiders now persist scraped data using SQLite databases.
