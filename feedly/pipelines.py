@@ -33,6 +33,8 @@ from scrapy.exporters import JsonLinesItemExporter
 from .logger import make_logging_config
 from .utils import json_converters, watch_for_timing
 
+NULL_TERMINATE = {'\0': True}
+
 
 class ConfigLogging:
     @classmethod
@@ -91,6 +93,9 @@ class CompressedStreamExportPipeline:
         self.stream.close()
 
     def process_item(self, item, spider):
+        if item is NULL_TERMINATE:
+            self.stream.write('\0\n')
+            return item
         self.exporter.export_item(item)
         return item
 

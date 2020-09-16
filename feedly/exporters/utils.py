@@ -58,7 +58,7 @@ def build_where_clause(includes=None, excludes=None):
             value_id = len(values)
             clauses.append(prefix + op[0] % {'column': key, 'id': value_id})
     clauses = ' AND '.join(clauses)
-    values = labeled_sequence(values, zero_based=False, as_str=True)
+    values = labeled_sequence(values, start=1, as_str=True)
     return clauses, values, required_columns
 
 

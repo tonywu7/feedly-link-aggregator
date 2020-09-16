@@ -20,13 +20,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 import os
+import sqlite3
+from functools import reduce
 from pathlib import Path
 
-import simplejson as json
+from setuptools.version import pkg_resources
+
+from ..utils import colored as _
+from ..utils import findpath
+from . import SCHEMA_VERSION
 
 SQL_REPO = Path(Path(__file__).with_name('commands')).resolve(True)
 METADATA = Path(Path(__file__).with_name('metadata')).resolve(True)
+MIGRATIONS = Path(Path(__file__).with_name('migrations')).resolve(True)
+
+Version = pkg_resources.parse_version
 
 commands = {}
 for cmdf in os.listdir(SQL_REPO):
@@ -49,7 +59,50 @@ def verify_version(conn, target_ver):
     else:
         db_ver = db_ver[0]
         if db_ver != target_ver:
-            raise ValueError(f'Cannot write to database of version {db_ver}; currently supported version: {target_ver}')
+            raise DBVersionError(db=db_ver, target=target_ver)
+
+
+def migrate(db_path, version=SCHEMA_VERSION):
+    conn = sqlite3.Connection(db_path)
+    log = logging.getLogger('feedly.db.migrate')
+    outdated = False
+    try:
+        verify_version(conn, version)
+    except DBVersionError as e:
+        outdated = e.db
+
+    if not outdated:
+        log.info(_('Database version is already up-to-date.', color='green'))
+        return
+
+    source_ver = Version(outdated)
+    target_ver = Version(version)
+    versions = {}
+    for cmd in os.listdir(MIGRATIONS):
+        from_, to_ = cmd[:-4].split('_')
+        from_ = Version(from_)
+        to_ = Version(to_)
+        to_versions = versions.setdefault(from_, set())
+        to_versions.add(to_)
+
+    path = []
+    scripts = []
+    if findpath(source_ver, target_ver, versions, path):
+        reduce(lambda x, y: scripts.append((x, y, f'{x}_{y}.sql')) or y, path)
+    else:
+        log.error(f'This version of the program no longer supports migrating from {source_ver} to {target_ver}')
+        return
+
+    for old, new, cmd in scripts:
+        log.info(f'{old} -> {new}')
+        with open(MIGRATIONS.joinpath(cmd)) as f:
+            with conn:
+                conn.executescript(f.read())
+
+    log.info(_('Cleaning up... This may take a long time.', color='cyan'))
+    with conn:
+        conn.execute('VACUUM;')
+    log.info(_('Done.', color='green'))
 
 
 def select_max_rowids(conn, tables):
@@ -63,78 +116,6 @@ def select_max_rowids(conn, tables):
     return max_row
 
 
-PRIMARY_KEY = 'primary_key'
-AUTOINCREMENT = 'autoincrement'
-UNIQUE = 'unique'
-
-
-def load_identity_config():
-    with open(METADATA.joinpath('identity.json')) as f:
-        config = json.load(f)
-    transform = {
-        AUTOINCREMENT: tuple,
-        PRIMARY_KEY: tuple,
-        UNIQUE: lambda cols: {tuple(arr) for arr in cols},
-    }
-    for table, conf in config.items():
-        for opt in conf:
-            conf[opt] = transform[opt](conf[opt])
-    return config
-
-
-def select_identity(conn, table, config):
-    opts = config.keys()
-    if opts == {PRIMARY_KEY, AUTOINCREMENT, UNIQUE}:
-        return _make_unique_auto_mapping(conn, table, config)
-    if opts == {PRIMARY_KEY, AUTOINCREMENT}:
-        return _make_pk_auto_mapping(conn, table, config)
-    if opts == {PRIMARY_KEY, UNIQUE}:
-        return _make_unique_pk_mapping(conn, table, config)
-    if opts == {PRIMARY_KEY}:
-        return _make_pk_mapping(conn, table, config)
-
-
-def _make_unique_auto_mapping(conn, table, config):
-    if config[PRIMARY_KEY] != config[AUTOINCREMENT]:
-        return _make_unique_pk_mapping(conn, table, config)
-    keys = _select_unique(conn, table, config)
-    values = _select_auto(conn, table, config)
-    return {k: v for k, v in zip(keys, values)}
-
-
-def _make_pk_auto_mapping(conn, table, config):
-    keys = _select_pk(conn, table, config)
-    values = _select_auto(conn, table, config)
-    return {k: v for k, v in zip(keys, values)}
-
-
-def _make_unique_pk_mapping(conn, table, config):
-    keys = _select_unique(conn, table, config)
-    values = _select_pk(conn, table, config)
-    return {k: v for k, v in zip(keys, values)}
-
-
-def _make_pk_mapping(conn, table, config):
-    keys = _select_pk(conn, table, config)
-    return {k: True for k in keys}
-
-
-def _select_unique(conn, table, config):
-    columns = []
-    for t in config[UNIQUE]:
-        cols = ', '.join(t)
-        columns.append(conn.execute(f'SELECT {cols} FROM {table}').fetchall())
-    return zip(*columns)
-
-
-def _select_pk(conn, table, config):
-    return conn.execute(f'SELECT {", ".join(config[PRIMARY_KEY])} FROM {table}').fetchall()
-
-
-def _select_auto(conn, table, config):
-    return [t[0] for t in conn.execute(f'SELECT {config[AUTOINCREMENT][0]} FROM {table}').fetchall()]
-
-
 def bulk_fetch(cur, size=100000, log=None):
     i = 0
     rows = cur.fetchmany(size)
@@ -145,3 +126,13 @@ def bulk_fetch(cur, size=100000, log=None):
         if log:
             log.info(f'Fetched {i} rows.')
         rows = cur.fetchmany(size)
+
+
+class DBVersionError(TypeError):
+    def __init__(self, db, target, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.db = db
+        self.target = target
+
+    def __str__(self):
+        return f'Cannot write to database of version {self.db}; currently supported version: {self.target}'

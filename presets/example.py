@@ -32,6 +32,10 @@ ENABLE_SEARCH = False
 # which could contain many more hyperlinks, although the original webpage may not exist anymore.
 SCRAPE_SOURCE_PAGE = False
 
+# How much data the program will keep in the memory while persisting scraped data to the database.
+# A lower setting puts less stress on the memory but it will take longer to write to the database.
+DATABASE_CACHE_SIZE = 100000
+
 # If you have a developer access token, you can provide it here.
 ACCESS_TOKEN = None
 
