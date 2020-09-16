@@ -106,9 +106,9 @@ def _layout_uq_auto(table, conf):
     if conf[PRIMARY_KEY] != conf[AUTOINCREMENT]:
         return _layout_uq_pk(table, conf)
 
-    def select_identity(conn):
-        keys = _select_unique(conn, table, conf[UNIQUE])
-        values = _select_auto(conn, table, conf[AUTOINCREMENT][0])
+    def select_identity(conn, from_rowid=0):
+        keys = _select_unique(conn, table, conf[UNIQUE], from_rowid)
+        values = _select_auto(conn, table, conf[AUTOINCREMENT][0], from_rowid)
         return dict(zip(keys, values))
 
     get_identity = _make_id_getter(conf[UNIQUE])
@@ -116,9 +116,9 @@ def _layout_uq_auto(table, conf):
 
 
 def _layout_pk_auto(table, conf):
-    def select_identity(conn):
-        keys = _select_pk(conn, table, conf[UNIQUE])
-        values = _select_auto(conn, table, conf[AUTOINCREMENT][0])
+    def select_identity(conn, from_rowid=0):
+        keys = _select_pk(conn, table, conf[UNIQUE], from_rowid)
+        values = _select_auto(conn, table, conf[AUTOINCREMENT][0], from_rowid)
         return dict(zip(keys, values))
 
     get_identity = _make_id_getter(conf[PRIMARY_KEY])
@@ -126,9 +126,9 @@ def _layout_pk_auto(table, conf):
 
 
 def _layout_uq_pk(table, conf):
-    def select_identity(conn):
-        keys = _select_unique(conn, table, conf[UNIQUE])
-        values = _select_pk(conn, table, conf[PRIMARY_KEY])
+    def select_identity(conn, from_rowid=0):
+        keys = _select_unique(conn, table, conf[UNIQUE], from_rowid)
+        values = _select_pk(conn, table, conf[PRIMARY_KEY], from_rowid)
         return dict(zip(keys, values))
 
     get_identity = _make_id_getter(conf[UNIQUE])
@@ -136,8 +136,8 @@ def _layout_uq_pk(table, conf):
 
 
 def _layout_pk_none(table, conf):
-    def select_identity(conn):
-        keys = _select_pk(conn, table, conf[PRIMARY_KEY])
+    def select_identity(conn, from_rowid=0):
+        keys = _select_pk(conn, table, conf[PRIMARY_KEY], from_rowid)
         return {k: True for k in keys}
 
     get_identity = _make_id_getter(conf[PRIMARY_KEY])
@@ -159,23 +159,23 @@ def _make_id_getter(columns):
     return get_id
 
 
-def _select_unique(conn, table, column_groups):
+def _select_unique(conn, table, column_groups, from_rowid=0):
     columns = []
     for t in column_groups:
         cols = ', '.join(t)
-        columns.append(conn.execute(f'SELECT {cols} FROM {table}').fetchall())
+        columns.append(conn.execute(f'SELECT {cols} FROM {table} WHERE rowid > ?', (from_rowid,)).fetchall())
     rows = list(zip(*columns))
     while rows and isinstance(rows[0], tuple) and len(rows[0]) == 1:
         rows = [r[0] for r in rows]
     return rows
 
 
-def _select_pk(conn, table, columns):
-    rows = conn.execute(f'SELECT {", ".join(columns)} FROM {table}').fetchall()
+def _select_pk(conn, table, columns, from_rowid=0):
+    rows = conn.execute(f'SELECT {", ".join(columns)} FROM {table} WHERE rowid > ?', (from_rowid,)).fetchall()
     while rows and isinstance(rows[0], tuple) and len(rows[0]) == 1:
         rows = [r[0] for r in rows]
     return rows
 
 
-def _select_auto(conn, table, column):
-    return [t[0] for t in conn.execute(f'SELECT {column} FROM {table}').fetchall()]
+def _select_auto(conn, table, column, from_rowid=0):
+    return [t[0] for t in conn.execute(f'SELECT {column} FROM {table} WHERE rowid > ?', (from_rowid,)).fetchall()]
