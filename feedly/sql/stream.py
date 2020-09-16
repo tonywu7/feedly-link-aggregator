@@ -120,7 +120,7 @@ def consume_stream(db_path, stream, batch_count):
             del values
             del consumer
 
-        log.info(_(f'Loaded {item_no + 1} items ({line_no} lines)', color='green'))
+        log.info(_(f'Loaded {item_no + 1} items', color='green'))
         log.info(_(f'Saved {num_records} new records in total', color='green'))
 
     conn.close()

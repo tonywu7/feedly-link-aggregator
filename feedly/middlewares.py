@@ -162,27 +162,26 @@ class RequestPersistenceDownloaderMiddleware:
     def _continue(self, meta, request, spider):
         meta['_requests'] = {**self.requests}
         resume_feed = meta['_requests'].pop('_feed', '')
+        feed = spider.config['FEED']
         action = 'x'
-        if '_feed' in self.requests and len(self.requests) > 1 or self.requests:
-            feed = spider.config['FEED']
-            if feed == resume_feed:
-                action = 'c'
-            else:
-                self.logger.info(_(f'Found unfinished crawl with {len(self.requests)} pending request(s)', color='cyan'))
-                self.logger.info(_(f'Continue crawling {resume_feed}?', color='cyan'))
-                self.logger.info(_(f"Start new crawl with '{spider.config['FEED']}'?", color='cyan'))
-                self.logger.info(_('Or exit?', color='cyan'))
-                action = 'x'
-            while action not in 'cse':
-                action = input('(continue/start/exit) [c]: ')[:1]
-            if action == 'e':
-                spider.crawler.engine.close_spider(spider, 'exit')
-                raise IgnoreRequest()
-            elif action == 's':
-                meta['_requests'] = {}
-                self.requests['_feed'] = feed
-            else:
-                self.logger.info(_(f'Resuming crawl with {len(self.requests)} request(s)', color='cyan'))
+        if meta['_requests']:
+            self.logger.info(_(f'Resuming crawl with {len(self.requests)} request(s)', color='cyan'))
+        if feed != resume_feed:
+            self.logger.info(_(f'Found unfinished crawl with {len(self.requests)} pending request(s)', color='cyan'))
+            self.logger.info(_(f"Continue crawling '{resume_feed}'?", color='cyan'))
+            self.logger.info(_(f"Start new crawl with '{feed}'?", color='cyan'))
+            self.logger.info(_('Or exit?', color='cyan'))
+            action = 'x'
+        else:
+            action = 'c'
+        while action not in 'cse':
+            action = input('(continue/start/exit) [c]: ')[:1]
+        if action == 'e':
+            spider.crawler.engine.close_spider(spider, 'exit')
+            raise IgnoreRequest()
+        elif action == 's':
+            meta['_requests'] = {}
+            self.requests['_feed'] = feed
         del meta['_persist']
         return Response(url=request.url, request=request)
 
