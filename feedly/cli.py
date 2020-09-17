@@ -172,13 +172,13 @@ def consume_leftovers(wd, delete, size):
     wd = Path(wd)
     db_path = wd.joinpath('index.db')
     for f in os.listdir(wd):
-        if f[:15] == 'stream.jsonl.gz':
-            streamf = wd.joinpath(f)
-            print(f'Reading {streamf}')
-            with gzip.open(streamf, 'rt') as stream:
+        f = wd.joinpath(f)
+        if f.stem[:6] == 'stream' and '.jsonl' in f.suffixes and '.gz' in f.suffixes:
+            print(f'Reading {f}')
+            with gzip.open(f, 'rt') as stream:
                 consume_stream(db_path, stream, size)
             if delete:
-                os.remove(streamf)
+                os.remove(f)
 
 
 @cli.command()

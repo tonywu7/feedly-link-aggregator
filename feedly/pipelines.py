@@ -23,7 +23,7 @@
 import cProfile
 import gzip
 import logging
-import os
+from datetime import datetime
 from pathlib import Path
 
 import simplejson as json
@@ -62,17 +62,15 @@ class CProfile:
 
 class CompressedStreamExportPipeline:
     def open_spider(self, spider):
-        self.logger = logging.getLogger('feedly.gzstream')
+        self.counter = 0
+        self.logger = logging.getLogger('feedly.stream')
         self.output_dir: Path = spider.config['OUTPUT']
-        path = self.output_dir.joinpath('stream.jsonl.gz')
-        if path.exists():
-            i = 1
-            while self.output_dir.joinpath(f'stream.jsonl.gz.{i}').exists():
-                i += 1
-            path2 = self.output_dir.joinpath(f'stream.jsonl.gz.{i}')
-            self.logger.info(f'Renaming existing {path.name} to {path2.name}')
-            os.rename(path, path2)
-        self.stream = gzip.open(path, 'at', encoding='utf8')
+        self.compresslevel = spider.config.getint('STREAM_COMPRESSLEVEL', 9)
+        date = datetime.now()
+        date = f'{date.strftime("%y%m%d")}.{date.strftime("%H%M%S")}'
+        path = self.output_dir.joinpath(f'stream.{date}.jsonl.gz')
+        self.stream_path = path
+        self.stream = gzip.open(path, 'at', encoding='utf8', compresslevel=self.compresslevel)
         self.init_exporter()
 
     def init_exporter(self):
@@ -82,14 +80,22 @@ class CompressedStreamExportPipeline:
     def close_spider(self, spider):
         self.exporter.finish_exporting()
         self.stream.close()
-        self.stream = gzip.open(self.stream.name, 'rt', encoding='utf8')
-        spider.digest_feed_export(self.stream)
+        self.stream = gzip.open(self.stream.name, 'rt', encoding='utf8', compresslevel=self.compresslevel)
+        if spider.config.getbool('PERSIST_TO_DB_ON_CLOSE', True):
+            spider.digest_feed_export(self.stream)
+        else:
+            self.logger.warn('Scraped data have not been saved to database.')
+            self.logger.warn('To save them, run `python -m feedly consume-leftovers`')
+            date = f'{self.stream_path.suffixes[0]}.{self.stream_path.suffixes[1]}'
+            unsaved = self.stream_path.with_name(f'stream~unsaved.{date}.jsonl.gz')
+            self.stream_path.rename(unsaved)
         self.stream.close()
 
     def process_item(self, item, spider):
         if item is NULL_TERMINATE:
             self.stream.write('\0\n')
             return item
+        self.counter += 1
         self.exporter.export_item(item)
         return item
 
@@ -104,5 +110,5 @@ class SimpleJSONLinesExporter(JsonLinesItemExporter):
 
     def export_item(self, item):
         serialized = self.encoder.encode(item) + '\n'
-        with watch_for_timing('Writing to stream', 0.03):
+        with watch_for_timing('Writing to stream', 0.1):
             self.file.write(serialized)
