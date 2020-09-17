@@ -31,7 +31,7 @@ from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from pprint import pformat
-from typing import Union
+from typing import Optional, Union
 from urllib.parse import unquote
 
 from scrapy import Spider
@@ -88,7 +88,7 @@ class FeedlyRSSSpider(Spider, ABC):
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
 
-    def __init__(self, name: str = None, preset: str = None, **kwargs):
+    def __init__(self, name: Optional[str] = None, preset: Optional[str] = None, **kwargs):
         super().__init__(name=name, **kwargs)
 
         kwargs = {k.upper(): v for k, v in kwargs.items()}
@@ -136,7 +136,7 @@ class FeedlyRSSSpider(Spider, ABC):
         params = {**self.api_base_params, **params}
         return feedly.build_api_url('streams', streamId=feed_id, **params)
 
-    def probe_feed(self, query: str, derive: bool = True, **kwargs):
+    def probe_feed(self, query: str, derive: bool = True, source: Optional[Request] = None, **kwargs):
         templates = self.config['FEED_TEMPLATES']
         if derive and templates:
             try:
@@ -150,7 +150,7 @@ class FeedlyRSSSpider(Spider, ABC):
         meta = kwargs.pop('meta', {})
         meta['try_feeds'] = urls
         meta['search_query'] = query
-        return ProbeRequest(url=query, callback=self.start_feeds, meta=meta, **kwargs)
+        return ProbeRequest(url=query, callback=self.start_feeds, meta=meta, source=source, **kwargs)
 
     def start_feeds(self, response: TextResponse):
         meta = response.meta
@@ -164,7 +164,7 @@ class FeedlyRSSSpider(Spider, ABC):
         for feed in feeds:
             yield self.next_page({'id': feed}, meta=meta, initial=True)
 
-    def next_page(self, data: JSONDict, response: TextResponse = None, initial: bool = False, **kwargs) -> Union[JSONDict, Request]:
+    def next_page(self, data: JSONDict, response: Optional[TextResponse] = None, initial: bool = False, **kwargs) -> Union[JSONDict, Request]:
         feed = data['id']
 
         if response:
@@ -211,7 +211,7 @@ class FeedlyRSSSpider(Spider, ABC):
         if items:
             response.meta['valid_feed'] = True
             if response.meta.get('reason') != 'continuation':
-                self.logger.info(_(f'Got new RSS feed at {source}', color='green'))
+                self.logger.info(_(f'Got new feed: {source}', color='green'))
 
         for item in items:
             entry = FeedlyEntry.from_upstream(item)
@@ -325,7 +325,7 @@ class CrawledItemSpiderMiddleware:
 
 
 class SQLExporterSpiderMiddleware:
-    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
+    def process_spider_output(self, response, result: SpiderOutput, spider):
         for data in result:
             if isinstance(data, Request) or 'item' not in data:
                 yield data

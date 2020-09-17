@@ -117,8 +117,9 @@ class ExplorationSpiderMiddleware:
         for url in sites:
             self.logger.debug(f'{url} (depth={depth})')
             yield spider.probe_feed(
-                url, meta={
-                    'inc_depth': True,
+                url, source=response.request,
+                meta={
+                    'inc_depth': 1,
                     'depth': depth,
                     'reason': 'newly_discovered',
                     'source_item': item,

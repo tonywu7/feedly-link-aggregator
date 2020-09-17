@@ -22,8 +22,8 @@
 
 import gzip
 import logging
-import os
 import pickle
+import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from contextlib import suppress
 from typing import Callable, List
@@ -42,6 +42,14 @@ from .utils import colored as _
 from .utils import guard_json, wait, watch_for_timing
 
 
+def filter_domains(request: Request, spider: Spider):
+    domains = spider.config['FOLLOW_DOMAINS']
+    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
+    if not feed_url or domains is None:
+        return True
+    return url_is_from_any_domain(feed_url, domains)
+
+
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
     def __init__(self, maxdepth, stats, verbose_stats=False, prio=1):
         super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=prio)
@@ -52,23 +60,24 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
         should_increase = []
         other_items = []
         for r in result:
-            if isinstance(r, Request) and r.meta.get('inc_depth'):
-                should_increase.append(r)
-            else:
+            if not isinstance(r, Request):
                 other_items.append(r)
+                continue
+            increase_in = r.meta.get('inc_depth', 0)
+            if increase_in == 1:
+                should_increase.append(r)
+                continue
+            elif increase_in > 1:
+                r.meta['inc_depth'] = increase_in - 1
+            other_items.append(r)
         other_items.extend(super().process_spider_output(response, should_increase, spider))
         return other_items
 
 
-def filter_domains(request: Request, spider: Spider):
-    domains = spider.config['FOLLOW_DOMAINS']
-    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
-    if not feed_url or domains is None:
-        return True
-    return url_is_from_any_domain(feed_url, domains)
-
-
 class FeedProbingDownloaderMiddleware:
+    def __init__(self):
+        self.logger = logging.getLogger('feedly.probe')
+
     async def process_request(self, request: ProbeRequest, spider):
         if not isinstance(request, ProbeRequest):
             return
@@ -79,6 +88,7 @@ class FeedProbingDownloaderMiddleware:
         query = meta['search_query']
         valid_feeds = []
 
+        self.logger.info(_(f'Probing {query}', color='grey'))
         scans = []
         for feed_url in feeds:
             feed_id = f'{prefix}{feed_url}'
@@ -191,7 +201,7 @@ class RequestPersistenceDownloaderMiddleware:
                 'url': request.url,
                 'method': request.method,
                 'callback': request.callback.__name__,
-                'meta': {**request.meta},
+                'meta': {**request.meta, '_time_pickled': time.perf_counter()},
                 'priority': request.priority,
             },
         )
@@ -212,11 +222,6 @@ class RequestPersistenceDownloaderMiddleware:
             pickle.dump(self.requests, f)
 
     def _close(self, spider, reason: str):
-        if reason == 'finished':
-            self.executor.shutdown(True)
-            with suppress(OSError):
-                os.remove(self.frequests)
-            return
         if len(self.requests):
             self.logger.info(_(f'# of requests persisted to filesystem: {len(self.requests)}', color='cyan'))
         self._dump_requests()
