@@ -16,7 +16,7 @@ BOT_NAME = 'feedly'
 SPIDER_MODULES = ['feedly.spiders']
 NEWSPIDER_MODULE = 'feedly.spiders'
 
-LOG_ENABLED = False
+LOG_ENABLED = True
 LOG_LEVEL = 20
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent

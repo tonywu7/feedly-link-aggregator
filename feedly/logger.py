@@ -250,8 +250,8 @@ def make_logging_config(app_name, **config):
         },
     }
 
-    override = config.get('config_override', app_logging_config)
-    log_config = compose_mappings(logging_config_template, override)
+    override = config.get('config_override', {})
+    log_config = compose_mappings(logging_config_template, app_logging_config, override)
     return log_config
 
 

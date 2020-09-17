@@ -109,7 +109,10 @@ def watch_for_timing(name, limit):
     finally:
         duration = time.perf_counter() - start
         if duration > limit:
-            logging.getLogger('profiler.timing').warn(f'[Timing violation] {name} took {duration * 1000:.0f}ms; desired time is {limit * 1000:.0f}ms.')
+            logging.getLogger('profiler.timing').info(colored(
+                f'[Performance violation] {name} took {duration * 1000:.0f}ms; desired time is {limit * 1000:.0f}ms.',
+                color='yellow',
+            ))
 
 
 def guard_json(text: str) -> JSONDict:

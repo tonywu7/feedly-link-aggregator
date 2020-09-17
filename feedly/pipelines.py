@@ -24,13 +24,12 @@ import cProfile
 import gzip
 import logging
 import os
-from logging.config import dictConfig
 from pathlib import Path
 
 import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
-from .logger import make_logging_config
+from . import _config_logging
 from .utils import json_converters, watch_for_timing
 
 NULL_TERMINATE = {'\0': True}
@@ -39,12 +38,7 @@ NULL_TERMINATE = {'\0': True}
 class ConfigLogging:
     @classmethod
     def from_crawler(cls, crawler):
-        dictConfig(make_logging_config(
-            'feedly',
-            formatter_style='standard',
-            formatter_colored=True,
-            level=crawler.settings.get('LOG_LEVEL') or 20,
-        ))
+        _config_logging()
         return cls()
 
     def process_item(self, item, spider):
@@ -110,5 +104,5 @@ class SimpleJSONLinesExporter(JsonLinesItemExporter):
 
     def export_item(self, item):
         serialized = self.encoder.encode(item) + '\n'
-        with watch_for_timing('Writing to stream', 0.01):
+        with watch_for_timing('Writing to stream', 0.03):
             self.file.write(serialized)
