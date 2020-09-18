@@ -104,23 +104,23 @@ def consume_stream(db_path, stream, batch_count):
         for c in consumers.values():
             c.send(BREAK)
 
-        for table in TABLES:
-            consumer = consumers.pop(table)
-            insert = inserts[table]
+        with conn:
+            for table in TABLES:
+                consumer = consumers.pop(table)
+                insert = inserts[table]
 
-            select_identity = ident_funcs[table][0]
-            rowid = select_max_rowid(conn, table)
+                select_identity = ident_funcs[table][0]
+                rowid = select_max_rowid(conn, table)
 
-            values = next(consumer)
-            with conn:
+                values = next(consumer)
                 conn.executemany(insert, values)
-            identity_keys[table].update(select_identity(conn, rowid))
+                identity_keys[table].update(select_identity(conn, rowid))
 
-            num_records += len(values)
-            log.info(f'  {table}: {len(identity_keys[table])} (+{len(values)})')
-            consumer.close()
-            del values
-            del consumer
+                num_records += len(values)
+                log.info(f'  {table}: {len(identity_keys[table])} (+{len(values)})')
+                consumer.close()
+                del values
+                del consumer
 
         log.info(_(f'Loaded {item_no + 1} items', color='green'))
         log.info(_(f'Saved {num_records} new records in total', color='green'))

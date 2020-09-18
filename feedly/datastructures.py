@@ -97,7 +97,7 @@ class KeywordStore:
 
     def __and__(self, other: KeywordStore) -> KeywordStore:
         if not isinstance(other, KeywordStore):
-            raise NotImplementedError()
+            return NotImplemented
         new = KeywordStore()
         common_keys = self._index.keys() & other._index.keys()
         taggings = {}
@@ -114,7 +114,7 @@ class KeywordStore:
 
     def __or__(self, other: KeywordStore) -> KeywordStore:
         if not isinstance(other, KeywordStore):
-            raise NotImplementedError()
+            return NotImplemented
         new = KeywordStore()
         index = {**self._index, **other._index}
         taggings = {}
@@ -131,7 +131,7 @@ class KeywordStore:
 
     def __sub__(self, other: KeywordStore) -> KeywordStore:
         if not isinstance(other, KeywordStore):
-            raise NotImplementedError()
+            return NotImplemented
         new = KeywordStore()
         taggings = {}
         for k in self._index:
