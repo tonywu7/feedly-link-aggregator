@@ -173,7 +173,6 @@ class RequestPersistenceDownloaderMiddleware:
         meta['_requests'] = {**self.requests}
         resume_feed = meta['_requests'].pop('_feed', '')
         feed = spider.config['FEED']
-        action = 'x'
         if meta['_requests']:
             self.logger.info(_(f'Resuming crawl with {len(self.requests)} request(s)', color='cyan'))
         if feed != resume_feed:

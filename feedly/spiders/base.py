@@ -155,10 +155,9 @@ class FeedlyRSSSpider(Spider, ABC):
     def start_feeds(self, response: TextResponse):
         meta = response.meta
         feeds = meta['valid_feeds']
-        if not feeds:
-            if meta['reason'] == 'user_specified':
-                self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
-                self.logger.critical('No feed to crawl!')
+        if not feeds and meta['reason'] == 'user_specified':
+            self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
+            self.logger.critical('No feed to crawl!')
 
         yield FinishedRequest(meta={**meta})
         for feed in feeds:
