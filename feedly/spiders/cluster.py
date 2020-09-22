@@ -29,7 +29,7 @@ from scrapy.http import Request, TextResponse
 from ..datastructures import compose_mappings
 from ..feedly import FeedlyEntry
 from ..requests import FinishedRequest
-from ..utils import HyperlinkStore, SpiderOutput
+from ..utils import SpiderOutput
 from .base import FeedlyRSSSpider
 
 
@@ -81,7 +81,7 @@ class ExplorationSpiderMiddleware:
 
     def __init__(self, crawler):
         self.stats = crawler.stats
-        self.logger = logging.getLogger('feedly.explore')
+        self.logger = logging.getLogger('explore')
         self._discovered = set()
         self._finished = set()
 
@@ -96,17 +96,16 @@ class ExplorationSpiderMiddleware:
                 continue
             if 'item' in data:
                 item = data['item']
-                store = data['urls']
                 self.stats.inc_value('rss/page_count')
-                yield from self.process_item(response, item, store, depth, spider)
+                yield from self.process_item(response, item, depth, spider)
             yield data
 
     def process_item(
         self, response: TextResponse,
-        item: FeedlyEntry, store: HyperlinkStore, depth: int,
+        item: FeedlyEntry, depth: int,
         spider: FeedClusterSpider,
     ):
-        dest = {urlsplit(k): v for k, v in store.items()}
+        dest = {urlsplit(k): v for k, v in item.hyperlinks.items()}
         dest = {k: v for k, v in dest.items() if k.netloc}
         self.stats.inc_value('rss/hyperlink_count', len(dest))
 

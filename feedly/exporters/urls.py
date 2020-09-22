@@ -30,7 +30,7 @@ from ..utils import pathsafe
 from .exporters import MappingCSVExporter, MappingLineExporter
 from .utils import build_where_clause, with_db
 
-log = logging.getLogger('url-exporter')
+log = logging.getLogger('exporter.url')
 
 
 def build_ctes(select):

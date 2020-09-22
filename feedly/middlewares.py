@@ -38,6 +38,7 @@ from twisted.internet.defer import DeferredList
 
 from . import feedly
 from .requests import ProbeRequest
+from .utils import LOG_LISTENER
 from .utils import colored as _
 from .utils import guard_json, wait, watch_for_timing
 
@@ -76,7 +77,7 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
 
 class FeedProbingDownloaderMiddleware:
     def __init__(self):
-        self.logger = logging.getLogger('feedly.probe')
+        self.logger = logging.getLogger('worker.prober')
 
     async def process_request(self, request: ProbeRequest, spider):
         if not isinstance(request, ProbeRequest):
@@ -127,8 +128,8 @@ class RequestPersistenceDownloaderMiddleware:
 
     def __init__(self):
         self.requests = {}
-        self.logger = logging.getLogger('feedly.persistence')
-        self.executor = ThreadPoolExecutor(1, 'feedly.persistence-fileops')
+        self.logger = logging.getLogger('worker.request')
+        self.executor = ThreadPoolExecutor(1, 'RequestPersistenceThread')
         self.future = None
         self.initialized = False
 
@@ -175,21 +176,24 @@ class RequestPersistenceDownloaderMiddleware:
         feed = spider.config['FEED']
         if meta['_requests']:
             self.logger.info(_(f'Resuming crawl with {len(self.requests)} request(s)', color='cyan'))
-        if feed != resume_feed:
+        if meta['_requests'] and feed != resume_feed:
             self.logger.info(_(f'Found unfinished crawl with {len(self.requests)} pending request(s)', color='cyan'))
             self.logger.info(_(f"Continue crawling '{resume_feed}'?", color='cyan'))
             self.logger.info(_(f"Start new crawl with '{feed}'?", color='cyan'))
             self.logger.info(_('Or exit?', color='cyan'))
             action = 'x'
         else:
-            action = 'c'
+            action = 's'
+        LOG_LISTENER.stop()
         while action not in 'cse':
             action = input('(continue/start/exit) [c]: ')[:1]
+        LOG_LISTENER.start()
         if action == 'e':
             spider.crawler.engine.close_spider(spider, 'exit')
             raise IgnoreRequest()
         elif action == 's':
             meta['_requests'] = {}
+            self.requests.clear()
             self.requests['_feed'] = feed
         del meta['_persist']
         return Response(url=request.url, request=request)
@@ -221,8 +225,8 @@ class RequestPersistenceDownloaderMiddleware:
             pickle.dump(self.requests, f)
 
     def _close(self, spider, reason: str):
-        if len(self.requests):
-            self.logger.info(_(f'# of requests persisted to filesystem: {len(self.requests)}', color='cyan'))
+        if len(self.requests) - 1:
+            self.logger.info(_(f'# of requests persisted to filesystem: {len(self.requests) - 1}', color='cyan'))
         self._dump_requests()
         self.executor.shutdown(True)
 
@@ -275,7 +279,7 @@ class AuthorizationDownloaderMiddleware:
 class HTTPErrorDownloaderMiddleware:
     def __init__(self, crawler):
         self.crawler = crawler
-        self.log = logging.getLogger('feedly.ratelimiting')
+        self.log = logging.getLogger('worker.ratelimiting')
 
     @classmethod
     def from_crawler(cls, crawler):

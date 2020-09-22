@@ -30,7 +30,7 @@ from ..datastructures import labeled_sequence
 from ..sql.utils import bulk_fetch
 from .utils import with_db
 
-log = logging.getLogger('graph-exporter')
+log = logging.getLogger('exporter.graph')
 
 
 def create_hyperlink_graph(db: sqlite3.Connection):

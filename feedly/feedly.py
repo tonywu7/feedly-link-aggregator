@@ -31,7 +31,7 @@ from attr.converters import optional
 
 from . import utils
 from .datastructures import Keywords
-from .utils import JSONDict
+from .utils import HyperlinkStore, JSONDict
 
 API_BASE = {
     'scheme': 'https',
@@ -77,6 +77,7 @@ class FeedlyEntry:
     title: Optional[str] = attr.ib(default='', repr=False)
 
     markup: Dict[str, str] = attr.ib(factory=dict, repr=False)
+    hyperlinks: HyperlinkStore = attr.ib(factory=HyperlinkStore, repr=False)
 
     @classmethod
     def from_upstream(cls, item: JSONDict) -> FeedlyEntry:
@@ -120,11 +121,15 @@ class FeedlyEntry:
         if content:
             content = content.get('content')
         if content:
-            entry.markup['summary'] = content
+            entry.add_markup('summary', content)
 
     @staticmethod
     def _filter_attrib(attrib: attr.Attribute, value: Any) -> bool:
         return attrib.name[0] != '_'
+
+    def add_markup(self, name, markup):
+        self.markup[name] = markup
+        self.hyperlinks.parse_html(self.url, markup)
 
     def for_json(self) -> JSONDict:
         dict_ = attr.asdict(self, filter=self._filter_attrib)

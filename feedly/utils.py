@@ -28,6 +28,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha1
+from logging.handlers import QueueListener
+from multiprocessing import Queue
 from typing import Any, Dict, List, Set, TypeVar, Union
 from urllib.parse import urlsplit
 
@@ -47,7 +49,45 @@ JSONType = Union[str, bool, int, float, None, List['JSONType'], Dict[str, 'JSONT
 JSONDict = Dict[str, JSONType]
 SpiderOutput = List[Union[JSONDict, Request]]
 
-log = logging.getLogger('feedly.utils')
+log = logging.getLogger('main.utils')
+
+
+class QueueListenerWrapper:
+    def __init__(self):
+        self.queue = None
+        self.listener = None
+
+    def enable(self):
+        if self.queue:
+            return self.queue
+        self.queue = Queue()
+        self.listener = QueueListener(self.queue, *logging.getLogger().handlers, respect_handler_level=True)
+        self.listener.start()
+        return self.queue
+
+    def disable(self):
+        if not self.queue:
+            return
+        self.listener.stop()
+        self.queue = None
+        self.listener = None
+
+    def start(self):
+        if not self.listener:
+            return
+        if not self.listener._thread:
+            self.listener.start()
+        return self.queue
+
+    def stop(self):
+        if not self.listener:
+            return
+        if self.listener._thread:
+            self.listener.stop()
+        return self.queue
+
+
+LOG_LISTENER = QueueListenerWrapper()
 
 
 def parse_html(domstring, url='about:blank') -> TextResponse:
@@ -102,17 +142,25 @@ def wait(t):
 
 
 @contextmanager
-def watch_for_timing(name, limit):
+def watch_for_timing(name, limit=0):
     start = time.perf_counter()
     try:
         yield
     finally:
         duration = time.perf_counter() - start
-        if duration > limit:
-            logging.getLogger('profiler.timing').info(colored(
+        message = None
+        level = None
+        if limit and duration > limit:
+            message = colored(
                 f'[Performance violation] {name} took {duration * 1000:.0f}ms; desired time is {limit * 1000:.0f}ms.',
                 color='yellow',
-            ))
+            )
+            level = logging.INFO
+        elif not limit:
+            message = f'{name} took {duration * 1000:.0f}ms'
+            level = logging.DEBUG
+        if message:
+            logging.getLogger('profiler.timing').log(level, message)
 
 
 def guard_json(text: str) -> JSONDict:

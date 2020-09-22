@@ -29,7 +29,7 @@ from scrapy.extensions.logstats import LogStats
 class LogStatsExtended(LogStats):
     def __init__(self, stats, interval=60.0):
         super().__init__(stats, interval=interval)
-        self.logger = logging.getLogger('feedly.logstats')
+        self.logger = logging.getLogger('logstats')
         self.items: list
         self.history = {}
         self.window = 5
