@@ -44,18 +44,29 @@ for cmdf in os.listdir(SQL_REPO):
         commands[cmdf[:-4]] = f.read()
 
 
+def create_indices(conn):
+    conn.executescript(commands['create-indices'])
+
+
+def drop_indices(conn):
+    conn.executescript(commands['drop-indices'])
+
+
 def create_all(conn):
-    with conn:
-        for name, cmd in commands.items():
-            if name[:5] == 'init_':
-                conn.executescript(cmd)
+    scripts = [commands[t] for t in ('pragma', 'version', 'create-tables')]
+    scripts = '\n'.join(scripts)
+    conn.executescript(scripts)
 
 
 def verify_version(conn, target_ver):
-    db_ver = conn.execute('SELECT version FROM __version__;').fetchone()
+    try:
+        db_ver = conn.execute('SELECT version FROM __version__;').fetchone()
+    except sqlite3.OperationalError:
+        db_ver = None
+        conn.execute(commands['version'])
+        conn.commit()
     if not db_ver:
-        with conn:
-            conn.execute('INSERT INTO __version__ (version) VALUES (?)', (target_ver,))
+        conn.execute('INSERT INTO __version__ (version) VALUES (?)', (target_ver,))
     else:
         db_ver = db_ver[0]
         if db_ver != target_ver:
@@ -64,7 +75,7 @@ def verify_version(conn, target_ver):
 
 def migrate(db_path, version=SCHEMA_VERSION):
     conn = sqlite3.Connection(db_path)
-    log = logging.getLogger('feedly.db.migrate')
+    log = logging.getLogger('db.migrate')
     outdated = False
     try:
         verify_version(conn, version)
@@ -105,8 +116,8 @@ def migrate(db_path, version=SCHEMA_VERSION):
     log.info(_('Done.', color='green'))
 
 
-def select_max_rowid(conn, table):
-    row = conn.execute(f'SELECT max(rowid) FROM {table}').fetchone()
+def count_rows(conn, table):
+    row = conn.execute(f'SELECT count(id) FROM {table}').fetchone()
     if row is None:
         row = [None]
     max_id = row[0] or 0

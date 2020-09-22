@@ -22,107 +22,211 @@
 
 import logging
 import sqlite3
+from collections import deque
+from pathlib import Path
 
-import simplejson as json
-
-from ..utils import colored as _
-from ..utils import read_jsonlines
+from ..utils import watch_for_timing
 from . import SCHEMA_VERSION
-from .identity import load_identity_config
-from .utils import create_all, select_max_rowid, verify_version
+from .factory import create_helpers
+from .utils import (count_rows, create_all, create_indices, drop_indices,
+                    verify_version)
 
-log = logging.getLogger('feedly.db.streamreader')
-
-BREAK = object()
-
-TABLES = ['url', 'keyword', 'item', 'hyperlink', 'feed', 'tagging', 'summary', 'webpage']
-
-
-def table_consumer(get_id, translate, get_remote_keys):
-    def consumer(table_name, identity_keys):
-        ident = identity_keys[table_name]
-        rows = []
-
-        while True:
-            data = yield
-            if data is BREAK:
-                break
-            rows.append(data)
-        yield
-
-        if translate:
-            remote_maps = get_remote_keys(identity_keys)
-            for row in rows:
-                translate(row, *remote_maps)
-
-        rows = {get_id(row): row for row in rows}
-        rows = [row for key, row in rows.items() if key not in ident]
-        yield rows
-    return consumer
+BEGIN = 'BEGIN;'
+END = 'END;'
+FOREIGN_KEY_ON = 'PRAGMA foreign_keys = ON;'
+FOREIGN_KEY_OFF = 'PRAGMA foreign_keys = OFF;'
 
 
-def consume_stream(db_path, stream, batch_count):
-    conn = sqlite3.connect(db_path)
+class DatabaseWriter:
+    def __init__(self, path, tables, models, buffering=100000, debug=False):
+        self.log = logging.getLogger('db.writer')
 
-    create_all(conn)
-    verify_version(conn, SCHEMA_VERSION)
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        self._queues = {t: deque() for t in tables}
+        self._conn = conn
 
-    inserts, ident_funcs, remote_funcs = load_identity_config()
-    consumer_funcs = {table: table_consumer(ident_funcs[table][1], *remote_funcs[table]) for table in TABLES}
+        self._setup_debug(debug)
 
-    stream_iter = read_jsonlines(stream, paginate=batch_count)
-    line_no = 1
-    item_no = 0
-    num_records = 0
-    stream_has_data = True
-    while stream_has_data:
+        self._lockfile = Path(path).with_suffix('.db.lock')
+        if self._lockfile.exists():
+            self.log.warn('Database lock file exists')
+            self.log.warn('Previous crawler did not exit properly')
+        else:
+            self._lockfile.touch()
 
-        identity_keys = {table: funcs[0](conn) for table, funcs in ident_funcs.items()}
-        consumers = {table: create(table, identity_keys) for table, create in consumer_funcs.items()}
+        verify_version(conn, SCHEMA_VERSION)
+        create_all(conn)
+        drop_indices(conn)
+        conn.execute(FOREIGN_KEY_OFF)
 
-        for c in consumers.values():
-            c.send(None)
+        self._tables = tables
+        self.bufsize = buffering
+        self._recordcount = 0
 
-        while True:
+        self._load_helpers(models)
+        self._load_foreign_keys()
+        for create_trigger in self._create_trigger.values():
+            create_trigger(conn)
+        self.flush()
+
+        self._rowcounts = {t: None for t in tables}
+        self._tally()
+
+    def _setup_debug(self, debug):
+        if debug:
+            sql_log = logging.getLogger('db.sql')
+            sql_log.propagate
+            self._conn.set_trace_callback(sql_log.debug)
+            if debug is not True:
+                handler = logging.StreamHandler(open(debug, 'w+'))
+                sql_log.addHandler(handler)
+
+    def _load_foreign_keys(self):
+        update_funcs = {}
+        for table in self._tables:
+            update_funcs[table] = conf = {}
+            for row in self._conn.execute(f'PRAGMA foreign_key_list({table})'):
+                conf[row['id']] = self._update_foreign[table][row['from']]
+        self._update_foreign = update_funcs
+
+    def _load_helpers(self, models):
+        self._insert_into = {}
+        self._remove_duplicate = {}
+        self._update_foreign = {}
+        self._create_trigger = {}
+        self._drop_trigger = {}
+        helpers = {
+            'ins': self._insert_into,
+            'dup': self._remove_duplicate,
+            'ufk': self._update_foreign,
+            'cft': self._create_trigger,
+            'dft': self._drop_trigger,
+        }
+        for table, funcs in create_helpers(models).items():
+            for k, t in helpers.items():
+                t[table] = funcs[k]
+
+    def _begin(self):
+        try:
+            self._conn.execute(BEGIN)
+            self.log.debug('Began new transaction')
+        except sqlite3.OperationalError:
+            pass
+
+    def _end(self):
+        try:
+            self._conn.execute(END)
+            self.log.debug('Ended new transaction')
+        except sqlite3.OperationalError:
+            pass
+
+    def write(self, table, item):
+        self._queues[table].append(item)
+        self._recordcount += 1
+        if self.bufsize and self._recordcount >= self.bufsize:
+            self.flush()
+
+    def _apply_changes(self):
+        for table in self._tables:
+            q = self._queues[table]
+            if not q:
+                continue
             try:
-                line_no, item_no, data = next(stream_iter)
-                if data is None:
-                    break
+                self._insert_into[table](self._conn, q)
+            except sqlite3.IntegrityError:
+                self._conn.rollback()
+                raise
+            else:
+                self._conn.commit()
+                self._recordcount -= len(q)
+                q.clear()
 
-                for rowtype, rows in data.items():
-                    for row in rows:
-                        consumers[rowtype].send(row)
+    def flush(self):
+        if self._recordcount:
+            self.log.info(f'Saving {self._recordcount} records')
+            with watch_for_timing('Flushing'):
+                self._apply_changes()
+        self._end()
+        self._begin()
 
-            except StopIteration:
-                stream_has_data = False
-                break
-            except json.JSONDecodeError as e:
-                log.error(e)
-                log.error(f'Corrupted data on line {line_no} in stream. Aborting!')
-                return
+    def deduplicate(self):
+        self.log.info('Deduplicating database records')
+        try:
+            with watch_for_timing('Deduplicating'):
+                for table in self._tables:
+                    self._remove_duplicate[table](self._conn)
+        except sqlite3.IntegrityError:
+            self._conn.rollback()
+            self._end()
+            raise
+        else:
+            self._conn.commit()
 
-        for c in consumers.values():
-            c.send(BREAK)
+    def reconcile(self):
+        self.log.info('Enforcing internal references')
+        try:
+            funcs = self._update_foreign
+            with watch_for_timing('Fixing foreign keys'):
+                mismatches = self._conn.execute('PRAGMA foreign_key_check;')
+                for table, rowid, parent, fkid in mismatches:
+                    funcs[table][fkid](self._conn, rowid)
+        except sqlite3.IntegrityError:
+            self._conn.rollback()
+            self._end()
+            raise
+        else:
+            self._conn.commit()
 
-        with conn:
-            for table in TABLES:
-                consumer = consumers.pop(table)
-                insert = inserts[table]
+    def close(self):
+        self.flush()
 
-                select_identity = ident_funcs[table][0]
-                rowid = select_max_rowid(conn, table)
+        for drop_trigger in self._drop_trigger.values():
+            drop_trigger(self._conn)
+        self.reconcile()
+        self.deduplicate()
 
-                values = next(consumer)
-                conn.executemany(insert, values)
-                identity_keys[table].update(select_identity(conn, rowid))
+        create_indices(self._conn)
+        self._conn.execute(FOREIGN_KEY_ON)
 
-                num_records += len(values)
-                log.info(f'  {table}: {len(identity_keys[table])} (+{len(values)})')
-                consumer.close()
-                del values
-                del consumer
+        self._tally()
+        self._conn.close()
+        self._lockfile.unlink()
 
-        log.info(_(f'Loaded {item_no + 1} items', color='green'))
-        log.info(_(f'Saved {num_records} new records in total', color='green'))
+    def _tally(self):
+        count = {t: count_rows(self._conn, t) for t in self._tables}
+        diff = {t: v is not None and count[t] - v for t, v in self._rowcounts.items()}
+        self.log.info('Database statistics:')
+        for table in self._tables:
+            if diff[table] is not False:
+                self.log.info(f'  {table}: {count[table]} ({diff[table]:+})')
+            else:
+                self.log.info(f'  {table}: {count[table]}')
+        self._rowcounts.update(count)
 
-    conn.close()
+    def __enter__(self):
+        return self
+
+    def __exit__(self, typ, val=None, tb=None):
+        self.close()
+        if not typ:
+            return True
+        if val is None:
+            if tb is None:
+                raise typ
+            val = typ()
+        if tb is not None:
+            val = val.with_traceback(tb)
+        raise val
+
+    @property
+    def execute(self):
+        return self._conn.execute
+
+    @property
+    def executemany(self):
+        return self._conn.executemany
+
+    @property
+    def executescript(self):
+        return self._conn.executescript

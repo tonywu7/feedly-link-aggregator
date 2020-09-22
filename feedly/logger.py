@@ -114,7 +114,7 @@ def _conditional_color(field, rules, default=('white',)):
 
 
 FMT_PREFIX = '%(asctime)s %(levelname)8s'
-FMT_LOGGER = '[%(name)s]'
+FMT_LOGGER = '[%(processName)s:%(name)s]'
 FMT_SOURCE = '(%(module)s.%(funcName)s:%(lineno)d)'
 
 formatter_styles = {
@@ -188,6 +188,9 @@ logging_config_template = {
         },
     },
     'loggers': {
+        'main': {
+            'level': logging.NOTSET,
+        },
         'scrapy': {
             'level': logging.NOTSET,
         },

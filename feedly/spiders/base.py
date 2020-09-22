@@ -42,13 +42,10 @@ from twisted.python.failure import Failure
 from .. import feedly
 from ..config import Config
 from ..feedly import FeedlyEntry
-from ..pipelines import NULL_TERMINATE
 from ..requests import (FinishedRequest, ProbeRequest, ResumeRequest,
                         reconstruct_request)
-from ..sql.stream import consume_stream
-from ..sql.utils import DBVersionError
 from ..urlkit import build_urls, select_templates
-from ..utils import HyperlinkStore, JSONDict, SpiderOutput
+from ..utils import JSONDict, SpiderOutput
 from ..utils import colored as _
 from ..utils import guard_json
 
@@ -59,7 +56,7 @@ class FeedlyRSSSpider(Spider, ABC):
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            'feedly.spiders.base.SQLExporterSpiderMiddleware': 200,
+            # 'feedly.spiders.base.SQLExporterSpiderMiddleware': 200,
             'feedly.spiders.base.FetchSourceSpiderMiddleware': 500,
             'feedly.spiders.base.CrawledItemSpiderMiddleware': 700,
         },
@@ -221,40 +218,19 @@ class FeedlyRSSSpider(Spider, ABC):
             self.stats.inc_value('rss/page_count')
 
             depth = response.meta.get('depth', 0)
-            store = HyperlinkStore()
-            for k, v in entry.markup.items():
-                store.parse_html(entry.url, v)
 
             yield {
                 'item': entry,
-                'urls': store,
                 'depth': depth,
                 'time_crawled': time.time(),
             }
 
         yield self.next_page(data, response=response)
 
-    def digest_feed_export(self, stream):
-        try:
-            self.logger.info('Digesting scraped data, this may take a while...')
-            self.logger.info('Avoid sending interruptions as it may lead to database corruption.')
-            self.logger.info('Reading item stream...')
-            consume_stream(self.config['OUTPUT'].joinpath('index.db'), stream, self.config.getint('DATABASE_CACHE_SIZE', 100000))
-        except DBVersionError as e:
-            self.logger.warn(e)
-            self.logger.warn('Cannot write to the existing database because it uses another schema version.')
-            self.logger.info(_('Run `python -m feedly upgrade-db` to upgrade it to the current version', color='cyan'))
-            self.logger.info(_('Then run `python -m feedly consume-leftovers` to read unsaved scraped data', color='cyan'))
-        except Exception as e:
-            self.logger.error(e, exc_info=True)
-            self.logger.error('Error writing to database. Try restarting the spider with a clean database.')
-            self.logger.error('(Unprocessed scraped data remain in `stream.jsonl.gz`)')
-            raise
-
 
 class FetchSourceSpiderMiddleware:
     def __init__(self):
-        self.logger = logging.getLogger('feedly.source')
+        self.logger = logging.getLogger('worker.fetchsource')
         self.initialized = False
 
     def init(self, spider: FeedlyRSSSpider):
@@ -283,14 +259,12 @@ class FetchSourceSpiderMiddleware:
         data = meta['data']
         data['source_fetched'] = True
         item: FeedlyEntry = data['item']
-        store: HyperlinkStore = data['urls']
         with suppress(AttributeError):
             if response.status >= 400:
                 self.logger.debug(f'Dropping {response}')
                 raise AttributeError
             body = response.text
-            item.markup['webpage'] = body
-            store.parse_html(item.url, body)
+            item.add_markup('webpage', body)
         yield data
 
     def handle_source_failure(self, failure: Failure):
@@ -321,60 +295,3 @@ class CrawledItemSpiderMiddleware:
             item: FeedlyEntry = data['item']
             if item.id_hash not in self.crawled_items:
                 yield data
-
-
-class SQLExporterSpiderMiddleware:
-    def process_spider_output(self, response, result: SpiderOutput, spider):
-        for data in result:
-            if isinstance(data, Request) or 'item' not in data:
-                yield data
-                continue
-            item: FeedlyEntry = data['item']
-            store: HyperlinkStore = data['urls']
-
-            urls = []
-            keywords = []
-            items = []
-            hyperlinks = []
-            feeds = []
-            taggings = []
-
-            src = item.url
-            urls.append({'url': src})
-            for u, kws in store.items():
-                urls.append({'url': u})
-                hyperlinks.append({'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]})
-
-            for k in item.keywords:
-                keywords.append({'keyword': k})
-                taggings.append({'item_id': item.id_hash, 'keyword_id': k})
-
-            feed = item.source['feed']
-            urls.append({'url': feed})
-            feeds.append({'url_id': feed, 'title': item.source.get('title', '')})
-
-            items.append({
-                'hash': item.id_hash,
-                'url': item.url,
-                'source': item.source['feed'],
-                'author': item.author,
-                'title': item.title,
-                'published': item.published.isoformat(),
-                'updated': item.updated.isoformat() if item.updated else None,
-                'crawled': data['time_crawled'],
-            })
-
-            group = {
-                'url': urls,
-                'keyword': keywords,
-                'item': items,
-                'hyperlink': hyperlinks,
-                'feed': feeds,
-                'tagging': taggings,
-            }
-            if item.markup:
-                for k, v in item.markup.items():
-                    group[k] = [{'url_id': src, 'markup': v}]
-
-            yield group
-            yield NULL_TERMINATE
