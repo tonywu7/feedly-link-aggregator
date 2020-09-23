@@ -34,13 +34,12 @@ from pathlib import Path
 import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
-from .feedly import FeedlyEntry
 from .sql.metadata import models, tables
 from .sql.stream import DatabaseWriter
 from .sql.utils import DatabaseVersionError
 from .utils import LOG_LISTENER
 from .utils import colored as _
-from .utils import json_converters, watch_for_timing
+from .utils import json_converters, watch_for_len, watch_for_timing
 
 NULL_TERMINATE = {'\0': True}
 ctx = get_context('forkserver')
@@ -54,7 +53,7 @@ class CompressedStreamExportPipeline:
         self.compresslevel = spider.config.getint('STREAM_COMPRESSLEVEL', 9)
         date = datetime.now()
         date = f'{date.strftime("%y%m%d")}.{date.strftime("%H%M%S")}'
-        path = self.output_dir.joinpath(f'stream.{date}.jsonl.gz')
+        path = self.output_dir / f'stream.{date}.jsonl.gz'
         self.stream_path = path
         self.stream = gzip.open(path, 'at', encoding='utf8', compresslevel=self.compresslevel)
         self.init_exporter()
@@ -103,7 +102,7 @@ class SimpleJSONLinesExporter(JsonLinesItemExporter):
 class SQLiteExportPipeline:
     def open_spider(self, spider):
         self.output_dir: Path = spider.config['OUTPUT']
-        self.db_path = self.output_dir.joinpath('index.db')
+        self.db_path = self.output_dir / 'index.db'
         buffering = spider.config.getint('DATABASE_CACHE_SIZE', 100000)
         try:
             debug = spider.config.getbool('SQL_DEBUG')
@@ -118,9 +117,14 @@ class SQLiteExportPipeline:
         self.stream.close()
 
     def process_item(self, data, spider):
-        if 'item' not in data:
-            return data
-        item: FeedlyEntry = data['item']
+        if 'item' in data:
+            return self.process_entry(data)
+        if 'source' in data:
+            return self.process_feed_source(data)
+        return data
+
+    def process_entry(self, data):
+        item = data['item']
         stream = self.stream
 
         src = item.url
@@ -129,14 +133,13 @@ class SQLiteExportPipeline:
             stream.write('url', {'url': u})
             stream.write('hyperlink', {'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]})
 
-        feed = item.source['feed']
+        feed = item.source
         stream.write('url', {'url': feed})
-        stream.write('feed', {'url_id': feed, 'title': item.source.get('title', '')})
+        stream.write('feed', {'url_id': feed, 'title': '', 'dead': None})
 
         stream.write('item', {
-            'hash': item.id_hash,
-            'url': item.url,
-            'source': item.source['feed'],
+            'url': src,
+            'source': item.source,
             'author': item.author,
             'title': item.title,
             'published': item.published.isoformat(),
@@ -146,11 +149,21 @@ class SQLiteExportPipeline:
 
         for k in item.keywords:
             stream.write('keyword', {'keyword': k})
-            stream.write('tagging', {'item_id': item.id_hash, 'keyword_id': k})
+            stream.write('tagging', {'url_id': src, 'keyword_id': k})
 
         if item.markup:
             for k, v in item.markup.items():
                 stream.write(k, {'url_id': src, 'markup': v})
+
+    def process_feed_source(self, data):
+        source = data['source']
+        feed = source['url']
+        self.stream.write('url', {'url': feed})
+        self.stream.write('feed', {
+            'url_id': feed,
+            'title': source['title'],
+            'dead': data['dead'],
+        })
 
     def close_spider(self, spider):
         self.close_stream()
@@ -209,8 +222,9 @@ class DatabaseStorageProcess(ctx.Process):
         if self._strikes > 1:
             self.deplete()
         else:
-            self.log.warn('Database writer process shielded from SIGINT')
-            self.log.warn('To force unclean shutdown, send SIGINT again.')
+            self.log.warn('Database writer process protected from SIGINT')
+            self.log.warn('Send SIGINT again to force unclean shutdown.')
+            self.log.warn(_('Sending SIGINT again may cause some records to be lost.', color='yellow'))
 
     def run(self):
         signal.signal(signal.SIGINT, self.handle_sigint)
@@ -241,10 +255,11 @@ class DatabaseStorageProcess(ctx.Process):
 class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
     class _WriterProxy:
-        def __init__(self, queue, closing, log):
+        def __init__(self, queue, closing, log, maxsize):
             self.queue = queue
             self.closing = closing
             self.buffer = deque()
+            self.maxsize = maxsize
             self.retry = 0
             self.retry_after = 0
             self.log = log
@@ -257,23 +272,27 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                 while buffer:
                     item = buffer.popleft()
                     self.queue.put_nowait(item)
+                self.retry = 0
             except Full:
                 self.set_retry()
                 if self.closing.is_set():
-                    self.log.warn('Record discarded because writer process has terminated.')
+                    self.log.warn('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
                 buffer.appendleft(item)
 
         def write(self, *item):
-            if self.retry and self.retry + self.retry_after < int(time.time()):
+            if (self.retry
+                and (len(self.buffer) > self.maxsize
+                     or self.retry + self.retry_after < int(time.time()))):
                 self.buffer.append(item)
                 return self.flush()
             try:
                 self.queue.put_nowait(item)
             except Full:
-                self.buffer.append(item)
-                self.set_retry()
+                with watch_for_len('unprocessed record queue', self.buffer, self.maxsize * .75):
+                    self.buffer.append(item)
+                    self.set_retry()
 
         def set_retry(self):
             if not self.retry:
@@ -310,7 +329,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             closing, buffering, debug, name='StorageProcess',
         )
         self.process.start()
-        self.stream = self._WriterProxy(item_queue, closing, self.log)
+        self.stream = self._WriterProxy(item_queue, closing, self.log, buffering * 2)
         self.closing = closing
         self.throw = throw
         self.err_queue = err_queue

@@ -2,8 +2,8 @@ import simplejson as json
 
 from .utils import METADATA
 
-MODELS = METADATA.joinpath('models.json')
-TABLES = METADATA.joinpath('tables.json')
+MODELS = METADATA / 'models.json'
+TABLES = METADATA / 'tables.json'
 
 with open(MODELS) as f:
     models = json.load(f)

@@ -57,9 +57,11 @@ def build_ctes(select):
             column_maps[f'{table}:{attr}'] = f'{table}.{attr}'
     for attr in date_attrs:
         column_maps[f'published:{attr}'] = f'items.{attr}'
+
     column_maps['tag'] = 'hyperlink.element'
     column_maps['source:title'] = 'items.title'
     column_maps['feed:title'] = 'feed_info.title'
+    column_maps['feed:isdead'] = 'feed_info.dead'
 
     return select % {'urlexpansions': urlexpansions, 'dateexpansions': dateexpansions}, column_maps
 
@@ -357,4 +359,10 @@ Each attribute is in the form of either _object_ or _object:key_.
 
         In addition to representing URLs, _source_ and _feed_ also has a
         _:title_ key which is the title of the post and the feed, respectively.
+
+    **Feed status**: _feed:isdead_
+
+        Whether a feed is dead (unreachable or no longer updated) or alive.
+        Value can be `True` (dead), `False` (alive), or `None` (unknown).
+
 """

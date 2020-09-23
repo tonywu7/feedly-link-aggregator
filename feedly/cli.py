@@ -31,7 +31,7 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
-from .sql.utils import check, migrate
+from .sql.cli import check, migrate
 
 
 def stylize(pattern, **styles):
@@ -108,7 +108,7 @@ def help_export(ctx: click.Context, param, exporter):
               Show this help and exit.\n
               Use `export <topic> --help` to see more info for a particular exporter.
               """)
-@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help="""
               Path to the directory containing scraped data.
               """)
@@ -159,20 +159,22 @@ def run_spider(spider, preset, **kwargs):
 
 
 @cli.command()
-@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help='Path to the directory containing scraped data.')
 def check_db(wd):
     """Check a database for potential problems and inconsistencies."""
-    db_path = Path(wd).joinpath('index.db')
+
+    db_path = Path(wd) / 'index.db'
     quit(check(db_path))
 
 
 @cli.command()
-@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help='Path to the directory containing scraped data.')
 def upgrade_db(wd):
     """Upgrade an older database to the latest schema version."""
-    db_path = Path(wd).joinpath('index.db')
+
+    db_path = Path(wd) / 'index.db'
     quit(migrate(db_path))
 
 

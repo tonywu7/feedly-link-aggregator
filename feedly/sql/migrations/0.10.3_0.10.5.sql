@@ -1,5 +1,9 @@
 BEGIN;
 
+DROP INDEX IF EXISTS ix_url_id_url;
+
+DROP INDEX IF EXISTS ix_item_id_hash;
+
 ALTER TABLE
     url RENAME TO tmp;
 
@@ -38,12 +42,67 @@ FROM
 
 DROP TABLE tmp;
 
+CREATE TABLE tmp_tagging (url_id INTEGER, keyword_id INTEGER);
+
+INSERT INTO
+    tmp_tagging (url_id, keyword_id)
+SELECT
+    item.url AS url_id,
+    tagging.keyword_id AS keyword_id
+FROM
+    tagging
+    JOIN item ON tagging.item_id == item.id;
+
+DELETE FROM
+    tmp_tagging
+WHERE
+    rowid NOT IN (
+        SELECT
+            min(rowid)
+        FROM
+            tmp_tagging
+        GROUP BY
+            url_id,
+            keyword_id
+    );
+
+DROP TABLE tagging;
+
+CREATE TABLE tagging (
+    id INTEGER NOT NULL,
+    url_id INTEGER NOT NULL,
+    keyword_id INTEGER NOT NULL,
+    CONSTRAINT pk_tagging PRIMARY KEY (id),
+    CONSTRAINT fk_tagging_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT fk_tagging_keyword_id_keyword FOREIGN KEY(keyword_id) REFERENCES keyword (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+INSERT INTO
+    tagging (url_id, keyword_id)
+SELECT
+    *
+FROM
+    tmp_tagging;
+
+DROP TABLE tmp_tagging;
+
 ALTER TABLE
     item RENAME TO tmp;
 
+DELETE FROM
+    tmp
+WHERE
+    rowid NOT IN (
+        SELECT
+            min(rowid)
+        FROM
+            tmp
+        GROUP BY
+            url
+    );
+
 CREATE TABLE item (
     id INTEGER NOT NULL,
-    hash VARCHAR(40) NOT NULL,
     url INTEGER NOT NULL,
     source INTEGER NOT NULL,
     title VARCHAR,
@@ -52,15 +111,13 @@ CREATE TABLE item (
     updated DATETIME,
     crawled FLOAT,
     CONSTRAINT pk_item PRIMARY KEY (id),
-    CONSTRAINT uq_item_hash UNIQUE (hash),
-    CONSTRAINT fk_item_url_url FOREIGN KEY(url) REFERENCES url (id),
-    CONSTRAINT fk_item_source_url FOREIGN KEY(source) REFERENCES url (id)
+    CONSTRAINT fk_item_url_url FOREIGN KEY(url) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT fk_item_source_url FOREIGN KEY(source) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
 INSERT INTO
     item (
         id,
-        hash,
         url,
         source,
         title,
@@ -70,7 +127,14 @@ INSERT INTO
         crawled
     )
 SELECT
-    *
+    id,
+    url,
+    source,
+    title,
+    author,
+    published,
+    updated,
+    crawled
 FROM
     tmp;
 
@@ -105,33 +169,14 @@ CREATE TABLE feed (
     id INTEGER NOT NULL,
     url_id INTEGER NOT NULL,
     title TEXT NOT NULL,
+    dead BOOLEAN,
     CONSTRAINT pk_feed PRIMARY KEY (id),
-    CONSTRAINT fk_feed_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_feed_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT ck_feed_dead CHECK (dead IN (0, 1))
 );
 
 INSERT INTO
     feed (url_id, title)
-SELECT
-    *
-FROM
-    tmp;
-
-DROP TABLE tmp;
-
-ALTER TABLE
-    tagging RENAME TO tmp;
-
-CREATE TABLE tagging (
-    id INTEGER NOT NULL,
-    item_id INTEGER NOT NULL,
-    keyword_id INTEGER NOT NULL,
-    CONSTRAINT pk_tagging PRIMARY KEY (id),
-    CONSTRAINT fk_tagging_item_id_item FOREIGN KEY(item_id) REFERENCES item (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT fk_tagging_keyword_id_keyword FOREIGN KEY(keyword_id) REFERENCES keyword (id) ON DELETE RESTRICT ON UPDATE RESTRICT
-);
-
-INSERT INTO
-    tagging (item_id, keyword_id)
 SELECT
     *
 FROM
@@ -179,25 +224,21 @@ FROM
 
 DROP TABLE tmp;
 
-DROP INDEX IF EXISTS ix_url_id_url;
+CREATE UNIQUE INDEX IF NOT EXISTS ix_url_url ON url (url);
 
-DROP INDEX IF EXISTS ix_item_id_hash;
+CREATE UNIQUE INDEX IF NOT EXISTS ix_keyword_keyword ON keyword (keyword);
 
-CREATE UNIQUE INDEX ix_url_url ON url (url);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_item_url ON item (url);
 
-CREATE UNIQUE INDEX ix_keyword_keyword ON keyword (keyword);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_hyperlink_source_id_target_id_element ON hyperlink (source_id, target_id, element);
 
-CREATE UNIQUE INDEX ix_item_hash ON item (hash);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_feed_url_id ON feed (url_id);
 
-CREATE UNIQUE INDEX ix_hyperlink_source_id_target_id_element ON hyperlink (source_id, target_id, element);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_tagging_url_id_keyword_id ON tagging (url_id, keyword_id);
 
-CREATE UNIQUE INDEX ix_feed_url_id ON feed (url_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_summary_url_id ON summary (url_id);
 
-CREATE UNIQUE INDEX ix_tagging_item_id_keyword_id ON tagging (item_id, keyword_id);
-
-CREATE UNIQUE INDEX ix_summary_url_id ON summary (url_id);
-
-CREATE UNIQUE INDEX ix_webpage_url_id ON webpage (url_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_webpage_url_id ON webpage (url_id);
 
 UPDATE
     __version__

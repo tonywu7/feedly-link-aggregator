@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from hashlib import sha1
 from logging.handlers import QueueListener
 from multiprocessing import Queue
+from operator import gt
 from typing import Any, Dict, List, Set, TypeVar, Union
 from urllib.parse import urlsplit
 
@@ -52,6 +53,14 @@ SpiderOutput = List[Union[JSONDict, Request]]
 log = logging.getLogger('main.utils')
 
 
+class RobustQueueListener(QueueListener):
+    def _monitor(self):
+        try:
+            super()._monitor()
+        except EOFError:
+            log.warn('Log listener has stopped.')
+
+
 class QueueListenerWrapper:
     def __init__(self):
         self.queue = None
@@ -61,7 +70,7 @@ class QueueListenerWrapper:
         if self.queue:
             return self.queue
         self.queue = Queue()
-        self.listener = QueueListener(self.queue, *logging.getLogger().handlers, respect_handler_level=True)
+        self.listener = RobustQueueListener(self.queue, *logging.getLogger().handlers, respect_handler_level=True)
         self.listener.start()
         return self.queue
 
@@ -131,6 +140,15 @@ def ensure_collection(supplier):
     return converter
 
 
+def is_rss_xml(response: TextResponse):
+    ctype = response.headers.get('Content-Type')
+    if not ctype:
+        return True
+    ctype = ctype.decode('utf8').split(';')[0]
+    return ctype in {'text/xml', 'application/xml', 'application/rss+xml',
+                     'application/rdf+xml', 'application/atom+xml'}
+
+
 def falsy(v):
     return v in {0, None, False, '0', 'None', 'none', 'False', 'false', 'null', 'undefined', 'NaN'}
 
@@ -151,16 +169,33 @@ def watch_for_timing(name, limit=0):
         message = None
         level = None
         if limit and duration > limit:
-            message = colored(
-                f'[Performance violation] {name} took {duration * 1000:.0f}ms; desired time is {limit * 1000:.0f}ms.',
-                color='yellow',
-            )
+            message = colored(f'[Performance violation] {name} took {duration * 1000:.0f}ms; '
+                              f'desired time is {limit * 1000:.0f}ms.', color='yellow')
             level = logging.INFO
         elif not limit:
             message = f'{name} took {duration * 1000:.0f}ms'
             level = logging.DEBUG
         if message:
             logging.getLogger('profiler.timing').log(level, message)
+
+
+@contextmanager
+def watch_for_len(name, col, limit=0, comp=gt):
+    try:
+        yield
+    finally:
+        size = len(col)
+        message = None
+        level = None
+        if limit and comp(size, limit):
+            message = colored(f'[Length violation] Length of {name} is {size}; '
+                              f'desired is {limit}.', color='yellow')
+            level = logging.INFO
+        elif not limit:
+            message = f'Length of {name} is {size}.'
+            level = logging.DEBUG
+        if message:
+            logging.getLogger('profiler.containerlen').log(level, message)
 
 
 def guard_json(text: str) -> JSONDict:

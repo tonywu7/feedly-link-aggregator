@@ -24,13 +24,30 @@ import logging
 import sys
 from typing import Dict, Union
 
-from .datastructures import compose_mappings
-
 try:
     import termcolor
-    colored = termcolor.colored
+    _ = termcolor.colored
 except ImportError:
-    colored = None
+    _ = None
+
+
+def compose_mappings(*mappings):
+    base = {}
+    base.update(mappings[0])
+    for m in mappings[1:]:
+        for k, v in m.items():
+            if k in base and type(base[k]) is type(v):
+                if isinstance(v, dict):
+                    base[k] = compose_mappings(base[k], v)
+                elif isinstance(v, set):
+                    base[k] |= v
+                elif isinstance(v, list):
+                    base[k].extend(v)
+                else:
+                    base[k] = v
+            else:
+                base[k] = v
+    return base
 
 
 class _LogContainer:
@@ -50,16 +67,14 @@ class _ColoredFormatter(logging.Formatter):
 
     def format(self, record):
         color_args = self.termcolor_args(self, record)
-        return colored(super().format(record), *color_args)
+        return _(super().format(record), *color_args)
 
 
 class _CascadingFormatter(logging.Formatter):
     def __init__(
-        self,
-        sections: str,
+        self, sections: str,
         stylesheet: Dict[str, Union[str, logging.Formatter]],
-        style='%',
-        stacktrace=None,
+        style='%', stacktrace=None, datefmt=None,
     ):
         self.stylesheet = {}
         for section, fmt in stylesheet.items():
@@ -68,7 +83,7 @@ class _CascadingFormatter(logging.Formatter):
                 formatter.formatException = lambda info: ''
                 formatter.formatStack = lambda info: ''
             self.stylesheet[section] = formatter
-        super().__init__(sections, None, style)
+        super().__init__(sections, datefmt, style)
 
     def format(self, record):
         parent = _LogContainer()
@@ -213,33 +228,23 @@ logging_config_template = {
 }
 
 
-def make_logging_config(app_name, **config):
-    level = config.get('level', logging.INFO)
-
-    color_mode = (
-        'colored'
-        if config.get('formatter_colored') and colored else
-        'normal'
-    )
-    config.setdefault('formatter_colored', color_mode)
-    formatter_name = config.setdefault('formatter_style', 'standard')
-    formatter = formatter_styles[formatter_name][color_mode]
-
-    if color_mode == 'colored' and config.get('logger_color_rules'):
-        formatter = compose_mappings(
-            formatter,
-            {'stylesheet': {'name': {'color': (
-                _conditional_color('name', config.get('logger_color_rules'))
-            )}}},
-        )
+def make_logging_config(
+    app_name, *overrides, level=logging.INFO,
+    style='standard', colored=True, **kwargs,
+):
+    color_mode = 'colored' if colored and _ else 'normal'
+    try:
+        formatter = formatter_styles[style][color_mode]
+    except KeyError:
+        formatter = style
 
     app_logging_config = {
         'formatters': {
-            formatter_name: formatter,
+            'fmt': formatter,
         },
         'handlers': {
             'console': {
-                'formatter': formatter_name,
+                'formatter': 'fmt',
                 'level': level,
             },
         },
@@ -253,8 +258,11 @@ def make_logging_config(app_name, **config):
         },
     }
 
-    override = config.get('config_override', {})
-    log_config = compose_mappings(logging_config_template, app_logging_config, override)
+    log_config = compose_mappings(
+        logging_config_template,
+        app_logging_config,
+        *overrides,
+    )
     return log_config
 
 
