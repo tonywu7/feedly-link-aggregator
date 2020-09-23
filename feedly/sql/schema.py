@@ -78,7 +78,6 @@ class Keyword(Base):
 
 class Item(Base):
     id = Column(types.Integer(), primary_key=True, autoincrement=True)
-    hash = Column(types.String(length=40), nullable=False)
 
     url = Column(ForeignKey('url.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
     source = Column(ForeignKey('url.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
@@ -91,7 +90,7 @@ class Item(Base):
 
     @declared_attr
     def __table_args__(self):
-        return (Index(None, 'hash', unique=True),)
+        return (Index(None, 'url', unique=True),)
 
 
 class Hyperlink(Base):
@@ -109,6 +108,7 @@ class Feed(Base):
     id = Column(types.Integer(), primary_key=True, autoincrement=True)
     url_id = Column(ForeignKey('url.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
     title = Column(types.Text(), nullable=False)
+    dead = Column(types.Boolean())
 
     @declared_attr
     def __table_args__(self):
@@ -117,12 +117,12 @@ class Feed(Base):
 
 class Tagging(Base):
     id = Column(types.Integer(), primary_key=True, autoincrement=True)
-    item_id = Column(ForeignKey('item.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
+    url_id = Column(ForeignKey('url.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
     keyword_id = Column(ForeignKey('keyword.id', ondelete=RESTRICT, onupdate=RESTRICT), nullable=False)
 
     @declared_attr
     def __table_args__(self):
-        return (Index(None, 'item_id', 'keyword_id', unique=True),)
+        return (Index(None, 'url_id', 'keyword_id', unique=True),)
 
 
 class Summary(Base):
@@ -132,7 +132,7 @@ class Summary(Base):
 
     @declared_attr
     def __table_args__(self):
-        return Index(None, 'url_id', unique=True), {'info': {'on_conflict': 'update'}}
+        return Index(None, 'url_id', unique=True), {'info': {'dedup': 'max'}}
 
 
 class Webpage(Base):
@@ -142,7 +142,7 @@ class Webpage(Base):
 
     @declared_attr
     def __table_args__(self):
-        return Index(None, 'url_id', unique=True), {'info': {'on_conflict': 'update'}}
+        return Index(None, 'url_id', unique=True), {'info': {'dedup': 'max'}}
 
 
 models = [m for m in Base._decl_class_registry.values() if isinstance(m, type) and issubclass(m, Base)]
@@ -179,12 +179,12 @@ def inspect_identity(table):
 
 
 def export_pragma():
-    with open(CWD.joinpath('commands', 'pragma.sql'), 'w') as f:
+    with open(CWD / 'commands' / 'pragma.sql', 'w') as f:
         f.write('PRAGMA foreign_keys = ON;\nPRAGMA journal_mode = WAL;\n')
 
 
 def export_version():
-    with open(CWD.joinpath('commands', 'version.sql'), 'w') as f:
+    with open(CWD / 'commands' / 'version.sql', 'w') as f:
         stmt = CreateTable(__Version__.__table__).compile(dialect=sqlite.dialect())
         stmt = str(stmt).replace('TABLE', 'TABLE IF NOT EXISTS')
         f.write(stmt)
@@ -192,7 +192,7 @@ def export_version():
 
 
 def export_schema():
-    with open(CWD.joinpath('commands', 'create-tables.sql'), 'w') as f:
+    with open(CWD / 'commands' / 'create-tables.sql', 'w') as f:
         for table in table_sequence:
             table = tables[table.__tablename__]
             stmt = CreateTable(table).compile(dialect=sqlite.dialect())
@@ -202,8 +202,8 @@ def export_schema():
 
 
 def export_indices():
-    with open(CWD.joinpath('commands', 'create-indices.sql'), 'w') as f1,\
-         open(CWD.joinpath('commands', 'drop-indices.sql'), 'w') as f2:
+    with open(CWD / 'commands' / 'create-indices.sql', 'w') as f1,\
+         open(CWD / 'commands' / 'drop-indices.sql', 'w') as f2:
 
         for table in tables.values():
             for index in table.indexes:
@@ -219,7 +219,7 @@ def export_indices():
 
 def export_selectall():
     for name, table in tables.items():
-        with open(CWD.joinpath('commands', f'selectall_{name}.sql'), 'w') as f:
+        with open(CWD / 'commands' / f'selectall_{name}.sql', 'w') as f:
             sql = select('*').select_from(table)
             f.write(str(sql))
 
@@ -228,13 +228,13 @@ def export_identities():
     config = {}
     for name, table in tables.items():
         config[name] = inspect_identity(table)
-    with open(CWD.joinpath('metadata', 'models.json'), 'w') as f:
+    with open(CWD / 'metadata' / 'models.json', 'w') as f:
         json.dump(config, f, iterable_as_array=True, sort_keys=True)
 
 
 def export_tables():
     tablenames = [m.__tablename__ for m in table_sequence]
-    with open(CWD.joinpath('metadata', 'tables.json'), 'w') as f:
+    with open(CWD / 'metadata' / 'tables.json', 'w') as f:
         json.dump(tablenames, f, iterable_as_array=True, sort_keys=True)
 
 

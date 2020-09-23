@@ -1,3 +1,26 @@
+# MIT License
+#
+# Copyright (c) 2020 Tony Wu <tony[dot]wu(at)nyu[dot]edu>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+import logging
 import operator
 import os
 import sqlite3
@@ -7,7 +30,9 @@ from pathlib import Path
 from ..datastructures import labeled_sequence
 from ..sql import SCHEMA_VERSION
 from ..sql.functions import register_all
-from ..sql.utils import verify_version
+from ..sql.utils import is_locked, verify_version
+
+log = logging.getLogger('exporter.utils')
 
 
 def subdomain(x, y):
@@ -26,6 +51,9 @@ filter_ops = {
     'le': operator.le,
 }
 sql_ops = {
+    ('is', 'None'): ('"%(column)s" IS NULL', '%s'),
+    ('is', 'True'): ('"%(column)s" == 1', '%s'),
+    ('is', 'False'): ('"%(column)s" == 0', '%s'),
     'is': ('"%(column)s" == :%(id)d', '%s'),
     'under': ('subdomain("%(column)s", :%(id)d)', '%s'),
     'startswith': ('"%(column)s" LIKE :%(id)d', '%s%%'),
@@ -44,7 +72,7 @@ for k, v in equivalencies:
 
 def build_where_clause(includes=None, excludes=None):
     if not includes and not excludes:
-        return 'TRUE', (), set()
+        return '1', (), set()
     values = []
     includes = includes or []
     excludes = excludes or []
@@ -53,7 +81,7 @@ def build_where_clause(includes=None, excludes=None):
     for prefix, criteria in (('', includes), ('NOT ', excludes)):
         for key, op, val in criteria:
             required_columns.add(key)
-            op = sql_ops[op]
+            op = sql_ops.get((op, val), sql_ops[op])
             values.append(op[1] % (val,))
             value_id = len(values)
             clauses.append(prefix + op[0] % {'column': key, 'id': value_id})
@@ -80,14 +108,19 @@ def with_db(exporter):
     @wraps(exporter)
     def e(wd, *args, **kwargs):
         wd = Path(wd)
-        output = wd.joinpath('out')
+        output = wd / 'out'
         os.makedirs(output, exist_ok=True)
 
-        db_path = wd.joinpath('index.db')
+        db_path = wd / 'index.db'
         if not db_path.exists():
             raise FileNotFoundError(f'index.db not found in {wd}')
 
         conn = sqlite3.connect(db_path)
+        if is_locked(conn):
+            log.error('Database was left in a partially consistent state.')
+            log.error('Run `python -m feedly check-db` to fix it first.')
+            return 1
+
         conn.row_factory = sqlite3.Row
         verify_version(conn, SCHEMA_VERSION)
         register_all(conn)

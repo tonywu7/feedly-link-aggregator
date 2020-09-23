@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Scrapy settings for feedly project
 #
 # For simplicity, this file contains only settings considered important or
@@ -18,6 +16,10 @@ NEWSPIDER_MODULE = 'feedly.spiders'
 
 LOG_ENABLED = True
 LOG_LEVEL = 20
+
+# This program uses a custom logging config (see __init__.py)
+# To give control of logging back to Scrapy, set this to False
+LOG_USE_CUSTOM_CONFIG = True
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
 USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkaggregator/{__version__}; +https://github.com/monotony113/feedly-link-aggregator)'
@@ -105,8 +107,3 @@ AUTOTHROTTLE_DEBUG = False
 # HTTPCACHE_DIR = 'httpcache'
 # HTTPCACHE_IGNORE_HTTP_CODES = []
 # HTTPCACHE_STORAGE = 'scrapy.extensions.httpcache.FilesystemCacheStorage'
-
-if globals().get('LOG_ENABLED'):
-    from . import _config_logging
-    _config_logging(globals().get('LOGGING_OVERRIDE'))
-    LOG_ENABLED = False

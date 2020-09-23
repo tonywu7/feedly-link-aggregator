@@ -26,7 +26,7 @@ from scrapy import Request
 class DummyRequest(Request):
     def __init__(self, *, callback=None, url=None, dont_filter=None, **kwargs):
         callback = callback or self.callback
-        super().__init__('http://dev.null', callback, dont_filter=True, **kwargs)
+        super().__init__('https://httpbin.org/status/204', callback, dont_filter=True, **kwargs)
 
     def callback(self, _):
         pass

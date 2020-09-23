@@ -49,7 +49,7 @@ class MappingExporter(ABC):
         filename = self.escape(self.filename % item)
         if filename[-1] == '/':
             filename = f'{filename}index{self.ext}'
-        path = self.output.joinpath(filename)
+        path = self.output / filename
         out = self.files.get(path)
         if not out:
             os.makedirs(path.parent, exist_ok=True)

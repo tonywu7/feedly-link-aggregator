@@ -47,8 +47,7 @@ def insert_funcs(table, conf, *args, **kwargs):
 
     keys = ', '.join(columns)
     subs = ', '.join([f':{c}' for c in columns])
-    strat = 'REPLACE' if conf[INFO].get('on_conflict') == 'update' else 'IGNORE'
-    insert = f'INSERT OR {strat} INTO {table} ({keys}) VALUES ({subs})'
+    insert = f'INSERT INTO {table} ({keys}) VALUES ({subs})'
 
     def do_insert(conn, data):
         conn.executemany(insert, data)
@@ -65,8 +64,9 @@ def dedup_funcs(table, conf, *args, **kwargs):
         return do_dedup
 
     keys = ', '.join(columns)
+    func = conf[INFO].get('dedup', 'min')
     delete = (f'DELETE FROM {table} WHERE rowid NOT IN '
-              f'(SELECT min(rowid) FROM {table} GROUP BY {keys})')
+              f'(SELECT {func}(rowid) FROM {table} GROUP BY {keys})')
 
     def do_dedup(conn):
         conn.execute(delete)

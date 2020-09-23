@@ -28,6 +28,7 @@ from urllib.parse import SplitResult, quote, urlsplit
 
 import attr
 from attr.converters import optional
+from attr.validators import instance_of
 
 from . import utils
 from .datastructures import Keywords
@@ -41,13 +42,14 @@ API_BASE = {
 API_ENDPOINTS = {
     'streams': '/v3/streams/contents',
     'search': '/v3/search/feeds',
+    'feeds': '/v3/feeds/',
 }
 
 
-def build_api_url(endpoint, **params):
+def build_api_url(endpoint, argument='', **params):
     if endpoint not in API_ENDPOINTS:
         raise ValueError(f'{endpoint} API is not supported')
-    url = {**API_BASE, 'path': API_ENDPOINTS[endpoint]}
+    url = {**API_BASE, 'path': API_ENDPOINTS[endpoint] + quote(argument, safe='')}
     url['query'] = '&'.join([f'{quote(k)}={quote(str(v))}' for k, v in params.items()])
     return SplitResult(**url).geturl()
 
@@ -64,13 +66,10 @@ def lowercase_set(iterable=None):
 
 @attr.s(kw_only=True, frozen=True)
 class FeedlyEntry:
-    _id: str = attr.ib(default=None, repr=False, eq=False, order=False)
-    id_hash: str = attr.ib(default=attr.Factory(lambda s: s._id and utils.sha1sum(s._id), takes_self=True), repr=False)
-
-    url: str = attr.ib()
+    url: str = attr.ib(validator=instance_of(str))
+    source: str = attr.ib(repr=False)
     published: datetime = attr.ib(converter=utils.datetime_converters)
     updated: datetime = attr.ib(default=None, converter=optional(utils.datetime_converters), repr=False)
-    source: Dict[str, str] = attr.ib(factory=dict, repr=False)
 
     keywords: Keywords = attr.ib(converter=utils.ensure_collection(lowercase_set), factory=lowercase_set, repr=False)
     author: Optional[str] = attr.ib(default='', repr=False)
@@ -86,7 +85,6 @@ class FeedlyEntry:
             value = item.get(name)
             if value:
                 data[name] = value
-        data['id'] = item['id']
         data['url'] = cls._get_page_url(item)
         data['source'] = cls._get_source_url(item)
         entry = cls(**data)
@@ -109,11 +107,9 @@ class FeedlyEntry:
     def _get_source_url(item):
         source = item.get('origin')
         if source:
-            return {
-                'feed': get_feed_uri(source.get('streamId', '/')),
-                'title': source.get('title', ''),
-                'homepage': source.get('htmlUrl'),
-            }
+            return get_feed_uri(source.get('streamId', '/'))
+        else:
+            return ''
 
     @staticmethod
     def _set_markup(entry, item):

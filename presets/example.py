@@ -13,7 +13,7 @@ FEED = 'https://xkcd.com/atom.xml'
 
 # Which part of the feed to download first: either `oldest` or `newest`
 DOWNLOAD_ORDER = 'oldest'
-# How much Feedly entries to download per API request. The minimum is 1 and the maximum is 1000.
+# How many entries to download per API request. The minimum is 1 and the maximum is 1000.
 DOWNLOAD_PER_BATCH = 1000
 
 # Whether or not to enable the search function
@@ -43,19 +43,43 @@ DATABASE_CACHE_SIZE = 100000
 # If you have a developer access token, you can provide it here.
 ACCESS_TOKEN = None
 
-# Cluster spider related option.
-# Value should be a collection of domains.
+# Cluster spider option.
 # Only nodes whose domains or parent domains are included here will be expanded upon
+# Value should be a collection of domains.
 # (other nodes are still recorded, but are not used to find new feeds).
 # If set to None, spider will not filter nodes based on domains.
 FOLLOW_DOMAINS = None
-# Cluster spider related option.
-# This is the same settings as the one used by the built-in DepthMiddleware.
+
+# Cluster spider option.
+# How much the spider will expand the cluster.
 # Value should be an integer.
+# (This is the same settings as the one used by the built-in DepthMiddleware.)
 # Nodes that are more `depth + 1` degree removed from the starting feed will not be expanded upon.
 # If set to 1, only the starting feed will be crawled.
 # If set to 0 or None, spider will keep crawling until manually stopped.
 DEPTH_LIMIT = 1
+
+# Cluster spider option.
+# Only crawl feeds that are of a certain `state`.
+#
+# A feed can be in one of two states:
+# dead    - The feed URL is unreachable (e.g. timed out);
+#           or a HEAD request returns a status code other than
+#             200 OK, 206 Partial, or 405 Method Not Allowed;
+#           or the Content-Type is anything other than that of a valid RSS feed
+#             (text/xml, application/xml, application/rss+xml, application/rdf+xml, application/atom+xml).
+# alive   - All other feeds are considered alive.
+#
+# This option accepts the following values:
+# all     - Do not filter feeds based on their state
+# dead    - Only crawl dead feeds
+# alive   - Only crawl living feeds
+# dead+   - Crawl all feeds, but dead feeds receive a higher priority
+# alive+  - Crawl all feeds, but living feeds receive a higher priority
+#
+# Note that values other than `all` cause the spider to send a HEAD request to
+# each feed URL about to be crawled, which will add extra overhead to the running time.
+SELECT_FEED_STATE = 'all'
 
 # Templates to generate different versions of RSS URLs based on the value of the FEED setting.
 # Because Feedly sometimes store an RSS feed's source URL with slight variations (e.g. using HTTP instead of HTTPS),

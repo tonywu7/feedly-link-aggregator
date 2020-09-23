@@ -56,7 +56,6 @@ class FeedlyRSSSpider(Spider, ABC):
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
             'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            # 'feedly.spiders.base.SQLExporterSpiderMiddleware': 200,
             'feedly.spiders.base.FetchSourceSpiderMiddleware': 500,
             'feedly.spiders.base.CrawledItemSpiderMiddleware': 700,
         },
@@ -77,6 +76,14 @@ class FeedlyRSSSpider(Spider, ABC):
         STREAM_ID_PREFIX = 'feed/'
 
         DATABASE_CACHE_SIZE = 100000
+
+    SELECTION_STRATS = {
+        'dead': {None: 1, True: 1, False: 0},
+        'alive': {None: 1, True: 0, False: 1},
+        'dead+': {None: 1, True: 1, False: -128},
+        'alive+': {None: 1, True: -128, False: 1},
+        'all': {None: 1, True: 1, False: 1},
+    }
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -122,7 +129,7 @@ class FeedlyRSSSpider(Spider, ABC):
         yield ResumeRequest(callback=self.resume_crawl)
 
     def resume_crawl(self, response):
-        requests = response.meta['_requests'].values()
+        requests = response.meta.get('_requests', {}).values()
         if not requests:
             yield self.probe_feed(self.config['FEED'], meta={'reason': 'user_specified', 'depth': 1})
         else:
@@ -138,28 +145,51 @@ class FeedlyRSSSpider(Spider, ABC):
         templates = self.config['FEED_TEMPLATES']
         if derive and templates:
             try:
-                urls = list(build_urls(query, *select_templates(query, templates)))
+                urls = build_urls(query, *select_templates(query, templates))
             except ValueError:
                 self.logger.debug(f'No template for {query}')
                 urls = [query]
         else:
             urls = [query]
 
+        prefix = self.config['STREAM_ID_PREFIX']
         meta = kwargs.pop('meta', {})
-        meta['try_feeds'] = urls
+        meta['try_feeds'] = {f'{prefix}{u}': None for u in urls}
         meta['search_query'] = query
         return ProbeRequest(url=query, callback=self.start_feeds, meta=meta, source=source, **kwargs)
 
     def start_feeds(self, response: TextResponse):
         meta = response.meta
-        feeds = meta['valid_feeds']
-        if not feeds and meta['reason'] == 'user_specified':
+        yield FinishedRequest(meta={**meta})
+
+        feeds = meta.get('valid_feeds')
+        if feeds is None:
+            feeds = meta.get('try_feeds', {})
+        if not len(feeds) and meta['reason'] == 'user_specified':
             self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
             self.logger.critical('No feed to crawl!')
 
-        yield FinishedRequest(meta={**meta})
-        for feed in feeds:
-            yield self.next_page({'id': feed}, meta=meta, initial=True)
+        yield from self.filter_feeds(feeds, meta)
+        yield from self.get_feed_info(feeds, meta)
+
+    def filter_feeds(self, feeds, meta):
+        if meta['reason'] == 'user_specified':
+            for feed in feeds:
+                yield self.next_page({'id': feed}, meta=meta, initial=True)
+            return
+
+        select = self.config.get('FEED_SELECTION', 'all')
+        for feed, dead in feeds.items():
+            prio = self.SELECTION_STRATS[select][dead]
+            if not prio:
+                self.logger.info(_(f'Dropped {"dead" if dead else "living"} feed {feed[5:]}', color='grey'))
+            else:
+                yield self.next_page({'id': feed}, meta=meta, initial=True, priority=prio)
+
+    def get_feed_info(self, feeds, meta):
+        feed_info = meta.get('feed_info', {})
+        for feed, info in feed_info.items():
+            yield {'source': info, 'dead': feeds.get(feed)}
 
     def next_page(self, data: JSONDict, response: Optional[TextResponse] = None, initial: bool = False, **kwargs) -> Union[JSONDict, Request]:
         feed = data['id']
@@ -282,7 +312,7 @@ class CrawledItemSpiderMiddleware:
         self.initialized = False
 
     def init(self, spider: FeedlyRSSSpider):
-        path = spider.config['OUTPUT'].joinpath('crawled_items.txt')
+        path = spider.config['OUTPUT'] / 'crawled_items.txt'
         if path.exists():
             with open(path, 'r') as f:
                 self.crawled_items |= set(f.read().split('\n'))
@@ -294,5 +324,5 @@ class CrawledItemSpiderMiddleware:
                 yield data
                 continue
             item: FeedlyEntry = data['item']
-            if item.id_hash not in self.crawled_items:
+            if item.url not in self.crawled_items:
                 yield data

@@ -27,6 +27,7 @@ import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from contextlib import suppress
 from typing import Callable, List
+from urllib.parse import urlsplit
 
 from scrapy import Spider
 from scrapy.exceptions import IgnoreRequest
@@ -36,11 +37,11 @@ from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
 
-from . import feedly
+from .feedly import build_api_url, get_feed_uri
 from .requests import ProbeRequest
 from .utils import LOG_LISTENER
 from .utils import colored as _
-from .utils import guard_json, wait, watch_for_timing
+from .utils import guard_json, is_rss_xml, wait, watch_for_timing
 
 
 def filter_domains(request: Request, spider: Spider):
@@ -78,43 +79,90 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
 class FeedProbingDownloaderMiddleware:
     def __init__(self):
         self.logger = logging.getLogger('worker.prober')
+        self.initialized = False
+
+    def init(self, spider):
+        self.test_status = spider.config.get('FEED_SELECTION', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
+        self.initialized = True
 
     async def process_request(self, request: ProbeRequest, spider):
+        if not self.initialized:
+            self.init(spider)
         if not isinstance(request, ProbeRequest):
             return
 
-        prefix = spider.config['STREAM_ID_PREFIX']
+        download = spider.crawler.engine.download
         meta = request.meta
         feeds = meta['try_feeds']
         query = meta['search_query']
         valid_feeds = []
 
         self.logger.info(_(f'Probing {query}', color='grey'))
-        scans = []
-        for feed_url in feeds:
-            feed_id = f'{prefix}{feed_url}'
-            url = spider.get_streams_url(feed_id, count=1)
-            scans.append(spider.crawler.engine.download(Request(url, meta={'feed': feed_id}), spider))
-        results = await DeferredList(scans)
 
+        queries = []
+        for feed_id in feeds:
+            url = spider.get_streams_url(feed_id, count=1)
+            queries.append(download(Request(url, meta={'feed': feed_id}), spider))
+        results = await DeferredList(queries, consumeErrors=True)
+
+        valid_feeds = {}
+        feed_info = {}
         for successful, response in results:
             if not successful:
                 continue
             data = guard_json(response.text)
             if data.get('items'):
-                valid_feeds.append(response.meta['feed'])
+                feed = response.meta['feed']
+                valid_feeds[feed] = None
+                feed_info[feed] = self.feed_info(data)
 
         if not valid_feeds and spider.config.getbool('ENABLE_SEARCH'):
-            response = await spider.crawler.engine.download(Request(feedly.build_api_url('search', query=query)), spider)
+            response = await spider.crawler.engine.download(Request(build_api_url('search', query=query)), spider)
             data = guard_json(response.text)
             if data.get('results'):
-                valid_feeds.extend(feed['feedId'] for feed in data['results'])
+                for feed in data['results']:
+                    valid_feeds[feed['feedId']] = None
+                    feed_info[feed] = self.feed_info(data)
+
+        if self.test_status:
+            await self.probe_feed_status(valid_feeds, download, spider)
 
         meta['valid_feeds'] = valid_feeds
+        meta['feed_info'] = feed_info
         del meta['try_feeds']
         if meta.get('inc_depth'):
             meta['depth'] -= 1
         return Response(url=request.url, request=request)
+
+    def feed_info(self, data):
+        return {
+            'url': get_feed_uri(data['id']),
+            'title': data.get('title', ''),
+        }
+
+    async def probe_feed_status(self, feeds, download, spider):
+        requests = []
+        for feed in feeds:
+            feed = feed
+            requests.append(download(Request(
+                get_feed_uri(feed), method='HEAD', meta={
+                    'url': feed,
+                    'max_retry_times': 2,
+                    'download_timeout': 10,
+                }), spider))
+
+        results = await DeferredList(requests, consumeErrors=True)
+
+        for successful, response in results:
+            if not successful:
+                dead = True
+            elif response.status not in {200, 206, 405}:
+                dead = True
+            elif not is_rss_xml(response):
+                dead = True
+            else:
+                dead = False
+            feeds[response.meta['url']] = dead
 
 
 class RequestPersistenceDownloaderMiddleware:
@@ -135,7 +183,7 @@ class RequestPersistenceDownloaderMiddleware:
 
     def init(self, spider):
         self.requests['_feed'] = spider.config['FEED']
-        path = spider.config['OUTPUT'].joinpath('requests.pickle.gz')
+        path = spider.config['OUTPUT'] / 'requests.pickle.gz'
         if path.exists():
             with gzip.open(path, 'rb') as f, suppress(EOFError):
                 self.requests = pickle.load(f)
@@ -153,7 +201,7 @@ class RequestPersistenceDownloaderMiddleware:
         meta = request.meta
         action = meta.get('_persist', None)
         if not action:
-            if 'null.io' in request.url:
+            if request.url == 'https://httpbin.org/status/204':
                 raise ValueError
             return
 
@@ -215,7 +263,7 @@ class RequestPersistenceDownloaderMiddleware:
         self.requests.pop(request.meta['pkey'], None)
 
     def _dump_requests(self):
-        with watch_for_timing('Creating future', 0.05):
+        with watch_for_timing('Creating future', 0.1):
             if self.future:
                 self.future.cancel()
             self.future = self.executor.submit(self._write)
@@ -292,7 +340,7 @@ class HTTPErrorDownloaderMiddleware:
             self.log.warn('your either did not provide, or provided a wrong access token.')
             self.log.warn(f'URL: {request.url}')
             raise IgnoreRequest()
-        if response.status == 429:
+        if response.status == 429 and urlsplit(request.url) == 'cloud.feedly.com':
             retry_after = response.headers.get('Retry-After')
             if retry_after:
                 retry_after = int(retry_after)

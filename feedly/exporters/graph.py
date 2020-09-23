@@ -156,7 +156,7 @@ def export(conn: sqlite3.Connection, wd: Path, output: Path, fmt='index.graphml'
     }[graphtype]
     g = reader(conn)
     log.info('Writing...')
-    with open(output.joinpath(fmt), 'w+') as f:
+    with open(output / fmt, 'w+') as f:
         g.save(f, format='graphml')
     log.info('Done.')
 
