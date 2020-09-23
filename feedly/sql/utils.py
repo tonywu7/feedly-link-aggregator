@@ -70,16 +70,46 @@ def verify_version(conn, target_ver):
     else:
         db_ver = db_ver[0]
         if db_ver != target_ver:
-            raise DBVersionError(db=db_ver, target=target_ver)
+            raise DatabaseVersionError(db=db_ver, target=target_ver)
+
+
+def mark_as_locked(conn):
+    conn.execute('CREATE TABLE IF NOT EXISTS lock (locked INTEGER)')
+
+
+def mark_as_unlocked(conn):
+    conn.execute('DROP TABLE IF EXISTS lock')
+
+
+def is_locked(conn):
+    exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name == 'lock'")
+    return len(list(exists))
+
+
+def check(db_path):
+    from .metadata import models, tables
+    from .stream import DatabaseWriter
+    log = logging.getLogger('db.check')
+    try:
+        DatabaseWriter(db_path, tables, models, 0).close()
+    except DatabaseVersionError as exc:
+        log.critical(exc)
+        log.error(_('Run `python -m feedly upgrade-db` to upgrade it to the current version.', color='cyan'))
 
 
 def migrate(db_path, version=SCHEMA_VERSION):
-    conn = sqlite3.Connection(db_path)
+    conn = sqlite3.Connection(db_path, isolation_level=None)
     log = logging.getLogger('db.migrate')
+
+    if is_locked(conn):
+        log.error('Database was left in an inconsistent state.')
+        log.error('Run `python -m feedly check-db` to fix it first.')
+        return 1
+
     outdated = False
     try:
         verify_version(conn, version)
-    except DBVersionError as e:
+    except DatabaseVersionError as e:
         outdated = e.db
 
     if not outdated:
@@ -105,14 +135,21 @@ def migrate(db_path, version=SCHEMA_VERSION):
         return
 
     for old, new, cmd in scripts:
-        log.info(f'{old} -> {new}')
+        log.info(f'Upgrading database schema from v{old} to v{new}. This may take a long time.')
         with open(MIGRATIONS.joinpath(cmd)) as f:
-            with conn:
+            try:
                 conn.executescript(f.read())
+            except sqlite3.OperationalError as e:
+                log.error(e, exc_info=True)
+                log.error('Failed to upgrade database. Undoing.')
+                conn.rollback()
+                conn.close()
+                return 1
+            else:
+                conn.commit()
 
-    log.info(_('Cleaning up... This may take a long time.', color='cyan'))
-    with conn:
-        conn.execute('VACUUM;')
+    log.info(_('Compacting database... This may take a long time.', color='cyan'))
+    conn.execute('VACUUM;')
     log.info(_('Done.', color='green'))
 
 
@@ -136,7 +173,7 @@ def bulk_fetch(cur, size=100000, log=None):
         rows = cur.fetchmany(size)
 
 
-class DBVersionError(TypeError):
+class DatabaseVersionError(TypeError):
     def __init__(self, db, target, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = db
@@ -144,3 +181,6 @@ class DBVersionError(TypeError):
 
     def __str__(self):
         return f'Cannot write to database of version {self.db}; currently supported version: {self.target}'
+
+    def __reduce__(self):
+        return self.__class__, (self.db, self.target)

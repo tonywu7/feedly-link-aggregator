@@ -20,14 +20,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import cProfile
 import gzip
 import logging
+import signal
+import time
 from collections import deque
-from contextlib import suppress
 from datetime import datetime
 from logging.handlers import QueueHandler
-from multiprocessing import Event, Process, Queue
+from multiprocessing import get_context
 from multiprocessing.queues import Empty, Full
 from pathlib import Path
 
@@ -37,26 +37,13 @@ from scrapy.exporters import JsonLinesItemExporter
 from .feedly import FeedlyEntry
 from .sql.metadata import models, tables
 from .sql.stream import DatabaseWriter
+from .sql.utils import DatabaseVersionError
 from .utils import LOG_LISTENER
 from .utils import colored as _
 from .utils import json_converters, watch_for_timing
 
 NULL_TERMINATE = {'\0': True}
-
-
-class CProfile:
-    def __init__(self):
-        self.pr = cProfile.Profile()
-
-    def open_spider(self, spider):
-        self.pr.enable()
-
-    def close_spider(self, spider):
-        self.pr.disable()
-        self.pr.print_stats(sort='tottime')
-
-    def process_item(self, item, spider):
-        return item
+ctx = get_context('forkserver')
 
 
 class CompressedStreamExportPipeline:
@@ -117,14 +104,15 @@ class SQLiteExportPipeline:
     def open_spider(self, spider):
         self.output_dir: Path = spider.config['OUTPUT']
         self.db_path = self.output_dir.joinpath('index.db')
+        buffering = spider.config.getint('DATABASE_CACHE_SIZE', 100000)
         try:
-            self.debug = spider.config.getbool('SQL_DEBUG')
+            debug = spider.config.getbool('SQL_DEBUG')
         except ValueError:
-            self.debug = spider.config.get('SQL_DEBUG')
-        self.init_stream()
+            debug = spider.config.get('SQL_DEBUG')
+        self.init_stream(debug, buffering)
 
-    def init_stream(self):
-        self.stream = DatabaseWriter(self.db_path, tables, models, debug=self.debug)
+    def init_stream(self, debug, buffering):
+        self.stream = DatabaseWriter(self.db_path, tables, models, buffering, debug)
 
     def close_stream(self):
         self.stream.close()
@@ -168,18 +156,21 @@ class SQLiteExportPipeline:
         self.close_stream()
 
 
-class DatabaseStorageProcess(Process):
+class DatabaseStorageProcess(ctx.Process):
     def __init__(
-        self, db_path, item_queue: Queue, log_queue: Queue, err_queue: Queue,
-        closing: Event, debug=False, *args, **kwargs,
+        self, db_path, item_queue: ctx.Queue, log_queue: ctx.Queue, err_queue: ctx.Queue,
+        closing: ctx.Event, buffering, debug, *args, **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.db_path = db_path
+        self.buffering = buffering
         self.debug = debug
         self.item_queue = item_queue
         self.log_queue = log_queue
         self.err_queue = err_queue
         self.closing = closing
+        self.stream: DatabaseWriter
+        self._strikes = 0
 
     def config_logging(self):
         handler = QueueHandler(self.log_queue)
@@ -190,56 +181,72 @@ class DatabaseStorageProcess(Process):
         root.setLevel(logging.DEBUG)
         self.log = logging.getLogger('main')
 
-    def accept_items(self, stream):
+    def accept_items(self):
+        stream = self.stream
         while not self.closing.is_set():
-            with suppress(KeyboardInterrupt, SystemExit):
-                try:
-                    table, item = self.item_queue.get(timeout=.5)
-                except Empty:
-                    pass
-                else:
-                    stream.write(table, item)
+            try:
+                table, item = self.item_queue.get(timeout=.5)
+            except Empty:
+                pass
+            else:
+                stream.write(table, item)
 
-    def deplete(self, stream):
+    def deplete(self):
+        stream = self.stream
         leftovers = []
         self.closing.set()
         try:
             while True:
-                leftovers.append(self.item_queue.get(timeout=5))
+                leftovers.append(self.item_queue.get(timeout=2))
         except Empty:
             self.log.debug('Queue depleted.')
             pass
         for table, item in leftovers:
             stream.write(table, item)
 
+    def handle_sigint(self, *args, **kwargs):
+        self._strikes += 1
+        if self._strikes > 1:
+            self.deplete()
+        else:
+            self.log.warn('Database writer process shielded from SIGINT')
+            self.log.warn('To force unclean shutdown, send SIGINT again.')
+
     def run(self):
+        signal.signal(signal.SIGINT, self.handle_sigint)
+
         self.config_logging()
         self.log.info(_('Starting database process', color='magenta'))
         self.log.info(_(f'Connected to database at {self.db_path}', color='magenta'))
-        stream = DatabaseWriter(self.db_path, tables, models, debug=self.debug)
 
         try:
-            self.accept_items(stream)
-            self.deplete(stream)
-
+            self.stream = DatabaseWriter(self.db_path, tables, models, buffering=self.buffering, debug=self.debug)
         except BaseException as e:
-            self.log.error(e, exc_info=True)
-            self.log.error('Database writer process encountered an exception.')
+            self.closing.set()
             self.err_queue.put_nowait(e)
+            return
 
+        try:
+            self.accept_items()
+        except BaseException as e:
+            self.err_queue.put_nowait(e)
+        else:
+            self.deplete()
         finally:
             self.log.info(_('Finalizing database', color='magenta'))
-            stream.close()
+            self.closing.set()
+            self.stream.close()
 
 
 class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
     class _WriterProxy:
-        def __init__(self, queue, closing, log, bufsize=5):
+        def __init__(self, queue, closing, log):
             self.queue = queue
             self.closing = closing
             self.buffer = deque()
-            self.bufsize = bufsize
+            self.retry = 0
+            self.retry_after = 0
             self.log = log
 
         def flush(self):
@@ -251,16 +258,29 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     item = buffer.popleft()
                     self.queue.put_nowait(item)
             except Full:
+                self.set_retry()
                 if self.closing.is_set():
                     self.log.warn('Record discarded because writer process has terminated.')
                     buffer.clear()
                     return
                 buffer.appendleft(item)
 
-        def write(self, *args):
-            self.buffer.append(args)
-            if len(self.buffer) >= self.bufsize:
-                self.flush()
+        def write(self, *item):
+            if self.retry and self.retry + self.retry_after < int(time.time()):
+                self.buffer.append(item)
+                return self.flush()
+            try:
+                self.queue.put_nowait(item)
+            except Full:
+                self.buffer.append(item)
+                self.set_retry()
+
+        def set_retry(self):
+            if not self.retry:
+                self.retry_after = 1
+            elif self.retry_after < 64:
+                self.retry_after = self.retry_after * 2
+            self.retry = time.time()
 
         def close(self):
             while self.buffer:
@@ -268,32 +288,62 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
     def open_spider(self, spider):
         LOG_LISTENER.enable()
+
+        self.closed = False
         self.log = logging.getLogger('pipeline.db')
+        self.exception_handlers = {
+            KeyboardInterrupt: lambda _: None,
+            DatabaseVersionError: self.handle_version_error,
+        }
+
         return super().open_spider(spider)
 
-    def init_stream(self):
-        item_queue = Queue()
-        err_queue = Queue()
+    def init_stream(self, debug, buffering):
+        closing = ctx.Event()
+        throw = ctx.Event()
+        item_queue = ctx.Queue()
+        err_queue = ctx.Queue()
         log_queue = LOG_LISTENER.start()
-        closing = Event()
 
         self.process = DatabaseStorageProcess(
             self.db_path, item_queue, log_queue, err_queue,
-            closing, self.debug, name='StorageProcess',
+            closing, buffering, debug, name='StorageProcess',
         )
         self.process.start()
         self.stream = self._WriterProxy(item_queue, closing, self.log)
         self.closing = closing
+        self.throw = throw
         self.err_queue = err_queue
+        self.check_error()
+
+    def check_error(self):
+        if not self.err_queue.empty():
+            error = self.err_queue.get_nowait()
+            handler = self.exception_handlers.get(type(error))
+            if handler:
+                return handler(error)
+            raise error
+
+    def handle_version_error(self, exc):
+        self.log.critical(exc)
+        self.log.error(_('Cannot write to the existing database because it uses another schema version.', color='red'))
+        self.log.error(_('Run `python -m feedly upgrade-db` to upgrade it to the current version.', color='cyan'))
+        return 'incompatible_database'
 
     def process_item(self, data, spider):
-        if not self.err_queue.empty():
-            error = self.err_queue.get()
-            with suppress(KeyboardInterrupt, SystemExit):
-                raise error
+        if self.closed:
+            return data
+
+        should_close = self.check_error()
+        if should_close:
+            spider.crawler.engine.close_spider(spider, should_close)
+            self.close_stream()
+            self.closed = True
+
         return super().process_item(data, spider)
 
     def close_stream(self):
         self.stream.close()
         self.closing.set()
         self.process.join()
+        LOG_LISTENER.disable()

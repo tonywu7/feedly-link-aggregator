@@ -9,7 +9,7 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
-__version__ = '0.10.2'
+__version__ = '0.10.5'
 
 BOT_NAME = 'feedly'
 
@@ -72,6 +72,7 @@ EXTENSIONS = {
     'scrapy.extensions.telnet.TelnetConsole': None,
     'scrapy.extensions.logstats.LogStats': None,
     'feedly.extensions.LogStatsExtended': 500,
+    # 'feedly.extensions.CProfile': 1000,
 }
 
 # Configure item pipelines
@@ -80,7 +81,6 @@ ITEM_PIPELINES = {
     # 'feedly.pipelines.CompressedStreamExportPipeline': 900,
     # 'feedly.pipelines.SQLiteExportPipeline': 900,
     'feedly.pipelines.SQLiteExportProcessPipeline': 900,
-    # 'feedly.pipelines.CProfile': 1000,
 }
 
 LOGSTATS_INTERVAL = 60.0
@@ -94,7 +94,7 @@ AUTOTHROTTLE_START_DELAY = 0
 AUTOTHROTTLE_MAX_DELAY = 60
 # The average number of requests Scrapy should be sending in parallel to
 # each remote server
-AUTOTHROTTLE_TARGET_CONCURRENCY = 2
+AUTOTHROTTLE_TARGET_CONCURRENCY = 1.5
 # Enable showing throttling stats for every response received:
 AUTOTHROTTLE_DEBUG = False
 

@@ -32,8 +32,12 @@ ENABLE_SEARCH = False
 # which could contain many more hyperlinks, although the original webpage may not exist anymore.
 SCRAPE_SOURCE_PAGE = False
 
-# How much data the program will keep in the memory while persisting scraped data to the database.
-# A lower setting puts less stress on the memory but it will take longer to write to the database.
+# How much scraped data the program will keep in the memory before persisting them to the database.
+# A lower setting puts less stress on the memory but causes more frequent disk writes.
+# Note: frequency of database writes does not affect spider performance
+# because it is done in a separate process.
+# Setting this to 1 causes every record to be immediately written to the database;
+# Setting this to 0 causes the program to keep all scraped data in memory until the spider stops.
 DATABASE_CACHE_SIZE = 100000
 
 # If you have a developer access token, you can provide it here.

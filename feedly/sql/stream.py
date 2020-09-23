@@ -23,12 +23,12 @@
 import logging
 import sqlite3
 from collections import deque
-from pathlib import Path
 
 from ..utils import watch_for_timing
 from . import SCHEMA_VERSION
 from .factory import create_helpers
 from .utils import (count_rows, create_all, create_indices, drop_indices,
+                    is_locked, mark_as_locked, mark_as_unlocked,
                     verify_version)
 
 BEGIN = 'BEGIN;'
@@ -38,7 +38,8 @@ FOREIGN_KEY_OFF = 'PRAGMA foreign_keys = OFF;'
 
 
 class DatabaseWriter:
-    def __init__(self, path, tables, models, buffering=100000, debug=False):
+    def __init__(self, path, tables, models, buffering, debug=False):
+        self.db_path = path
         self.log = logging.getLogger('db.writer')
 
         conn = sqlite3.connect(path, isolation_level=None)
@@ -46,22 +47,18 @@ class DatabaseWriter:
         self._queues = {t: deque() for t in tables}
         self._conn = conn
 
-        self._setup_debug(debug)
+        self._closed = False
 
-        self._lockfile = Path(path).with_suffix('.db.lock')
-        if self._lockfile.exists():
-            self.log.warn('Database lock file exists')
-            self.log.warn('Previous crawler did not exit properly')
-        else:
-            self._lockfile.touch()
+        self._setup_debug(debug)
 
         verify_version(conn, SCHEMA_VERSION)
         create_all(conn)
         drop_indices(conn)
         conn.execute(FOREIGN_KEY_OFF)
+        self._lock_db()
 
         self._tables = tables
-        self.bufsize = buffering
+        self.buffering = buffering
         self._recordcount = 0
 
         self._load_helpers(models)
@@ -72,6 +69,15 @@ class DatabaseWriter:
 
         self._rowcounts = {t: None for t in tables}
         self._tally()
+
+    def _lock_db(self):
+        unclean = False
+        if is_locked(self._conn):
+            self.log.warn('Database lock table exists')
+            unclean = True
+        mark_as_locked(self._conn)
+        if unclean:
+            self.log.warn('Previous crawler did not exit properly')
 
     def _setup_debug(self, debug):
         if debug:
@@ -124,7 +130,7 @@ class DatabaseWriter:
     def write(self, table, item):
         self._queues[table].append(item)
         self._recordcount += 1
-        if self.bufsize and self._recordcount >= self.bufsize:
+        if self.buffering and self._recordcount >= self.buffering:
             self.flush()
 
     def _apply_changes(self):
@@ -179,19 +185,23 @@ class DatabaseWriter:
             self._conn.commit()
 
     def close(self):
+        if self._closed:
+            return
         self.flush()
+        conn = self._conn
 
         for drop_trigger in self._drop_trigger.values():
-            drop_trigger(self._conn)
+            drop_trigger(conn)
         self.reconcile()
         self.deduplicate()
 
-        create_indices(self._conn)
-        self._conn.execute(FOREIGN_KEY_ON)
+        create_indices(conn)
+        conn.execute(FOREIGN_KEY_ON)
 
         self._tally()
-        self._conn.close()
-        self._lockfile.unlink()
+        mark_as_unlocked(self._conn)
+        conn.close()
+        self._closed = True
 
     def _tally(self):
         count = {t: count_rows(self._conn, t) for t in self._tables}

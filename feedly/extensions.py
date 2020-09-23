@@ -20,10 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import cProfile
 import logging
+import time
 from collections import deque
 
 from scrapy.extensions.logstats import LogStats
+from scrapy.signals import spider_closed, spider_opened
 
 
 class LogStatsExtended(LogStats):
@@ -61,3 +64,23 @@ class LogStatsExtended(LogStats):
                 self.logger.info(f'  {k}: {v} ({rates[k]:.1f}/min)')
             else:
                 self.logger.info(f'  {k}: {v}')
+
+
+class CProfile:
+    @classmethod
+    def from_crawler(cls, crawler):
+        instance = cls(crawler.settings.get('CPROFILE_OUTPUT'))
+        crawler.signals.connect(instance.open_spider, spider_opened)
+        crawler.signals.connect(instance.close_spider, spider_closed)
+        return instance
+
+    def __init__(self, path=None):
+        self.pr = cProfile.Profile()
+        self.path = path or f'{time.time():.0f}.cprofile'
+
+    def open_spider(self, spider):
+        self.pr.enable()
+
+    def close_spider(self, spider):
+        self.pr.disable()
+        self.pr.dump_stats(self.path)

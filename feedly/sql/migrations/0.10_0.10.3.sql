@@ -1,3 +1,5 @@
+BEGIN;
+
 ALTER TABLE
     markup RENAME TO tmp;
 
@@ -49,3 +51,5 @@ UPDATE
     __version__
 SET
     version = '0.10.3';
+
+END;
