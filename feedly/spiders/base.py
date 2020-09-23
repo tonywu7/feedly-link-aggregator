@@ -126,6 +126,7 @@ class FeedlyRSSSpider(Spider, ABC):
         if not requests:
             yield self.probe_feed(self.config['FEED'], meta={'reason': 'user_specified', 'depth': 1})
         else:
+            self.logger.info(_(f'Resuming crawl with {len(requests)} request(s)', color='cyan'))
             for cls, kwargs in requests:
                 yield reconstruct_request(cls, self, **kwargs)
 

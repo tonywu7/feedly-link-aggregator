@@ -1,4 +1,3 @@
-
 DROP INDEX IF EXISTS ix_url_url;
 
 DROP INDEX IF EXISTS ix_keyword_keyword;

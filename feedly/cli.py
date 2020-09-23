@@ -31,7 +31,7 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
-from .sql.utils import migrate
+from .sql.utils import check, migrate
 
 
 def stylize(pattern, **styles):
@@ -161,10 +161,19 @@ def run_spider(spider, preset, **kwargs):
 @cli.command()
 @click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
               help='Path to the directory containing scraped data.')
+def check_db(wd):
+    """Check a database for potential problems and inconsistencies."""
+    db_path = Path(wd).joinpath('index.db')
+    quit(check(db_path))
+
+
+@cli.command()
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True),
+              help='Path to the directory containing scraped data.')
 def upgrade_db(wd):
     """Upgrade an older database to the latest schema version."""
     db_path = Path(wd).joinpath('index.db')
-    migrate(db_path)
+    quit(migrate(db_path))
 
 
 def numpydoc2click(doc: str):
