@@ -79,7 +79,7 @@ DEPTH_LIMIT = 1
 #
 # Note that values other than `all` cause the spider to send a HEAD request to
 # each feed URL about to be crawled, which will add extra overhead to the running time.
-SELECT_FEED_STATE = 'all'
+FEED_STATE_SELECT = 'all'
 
 # Templates to generate different versions of RSS URLs based on the value of the FEED setting.
 # Because Feedly sometimes store an RSS feed's source URL with slight variations (e.g. using HTTP instead of HTTPS),

@@ -1,7 +1,7 @@
 from urllib.parse import urlsplit
 
 FOLLOW_DOMAINS = {'tumblr.com'}
-SELECT_FEED_STATE = 'dead+'
+FEED_STATE_SELECT = 'dead+'
 
 
 def converter(base, match):

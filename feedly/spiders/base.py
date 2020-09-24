@@ -178,7 +178,7 @@ class FeedlyRSSSpider(Spider, ABC):
                 yield self.next_page({'id': feed}, meta=meta, initial=True)
             return
 
-        select = self.config.get('FEED_SELECTION', 'all')
+        select = self.config.get('FEED_STATE_SELECT', 'all')
         for feed, dead in feeds.items():
             prio = self.SELECTION_STRATS[select][dead]
             if not prio:

@@ -279,7 +279,8 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     self.log.warn('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
-                buffer.appendleft(item)
+                with watch_for_len('unprocessed record queue', buffer, self.maxsize * .75):
+                    buffer.appendleft(item)
 
         def write(self, *item):
             if (self.retry
@@ -290,9 +291,8 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             try:
                 self.queue.put_nowait(item)
             except Full:
-                with watch_for_len('unprocessed record queue', self.buffer, self.maxsize * .75):
-                    self.buffer.append(item)
-                    self.set_retry()
+                self.buffer.append(item)
+                self.set_retry()
 
         def set_retry(self):
             if not self.retry:

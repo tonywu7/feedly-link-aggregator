@@ -46,8 +46,6 @@ class FeedClusterSpider(FeedlyRSSSpider):
     })
 
     class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
-        OVERWRITE = True
-
         FOLLOW_DOMAINS = None
         DEPTH_LIMIT = 1
 
