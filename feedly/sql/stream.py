@@ -82,9 +82,9 @@ class DatabaseWriter:
     def _setup_debug(self, debug):
         if debug:
             sql_log = logging.getLogger('db.sql')
-            sql_log.propagate
             self._conn.set_trace_callback(sql_log.debug)
             if debug is not True:
+                sql_log.propagate = False
                 handler = logging.StreamHandler(open(debug, 'w+'))
                 sql_log.addHandler(handler)
 

@@ -39,18 +39,24 @@ MIGRATIONS = Path(Path(__file__).with_name('migrations')).resolve(True)
 Version = pkg_resources.parse_version
 
 
-def check(db_path):
+def check(db_path, debug=False):
     log = logging.getLogger('db.check')
     try:
-        DatabaseWriter(db_path, tables, models, 0).close()
+        DatabaseWriter(db_path, tables, models, 0, debug=debug).close()
+        log.info(_('Database is OK.', color='green'))
     except DatabaseVersionError as exc:
         log.critical(exc)
         log.error(_('Run `python -m feedly upgrade-db` to upgrade it to the current version.', color='cyan'))
+    except Exception as exc:
+        log.critical(exc, exc_info=True)
+        log.error(_('Database has irrecoverable inconsistencies.', color='red'))
 
 
-def migrate(db_path, version=SCHEMA_VERSION):
+def migrate(db_path, debug=False, version=SCHEMA_VERSION):
     conn = sqlite3.Connection(db_path, isolation_level=None)
     log = logging.getLogger('db.migrate')
+    if debug:
+        conn.set_trace_callback(log.debug)
 
     if is_locked(conn):
         log.error('Database was left in a partially consistent state.')

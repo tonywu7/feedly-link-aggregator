@@ -20,6 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 import re
 from functools import wraps
 from importlib import import_module
@@ -59,8 +60,16 @@ def get_help(ctx):
 
 
 @click.group()
-def cli():
-    pass
+@click.option('--debug', is_flag=True)
+@click.pass_context
+def cli(ctx, debug=False):
+    if debug:
+        root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
+        for handler in root.handlers:
+            handler.setLevel(logging.DEBUG)
+    ctx.ensure_object(dict)
+    ctx.obj['DEBUG'] = debug
 
 
 def export_load_exporter(ctx: click.Context, param, value):
@@ -161,21 +170,23 @@ def run_spider(spider, preset, **kwargs):
 @cli.command()
 @click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help='Path to the directory containing scraped data.')
-def check_db(wd):
+@click.pass_context
+def check_db(ctx, wd, **kwargs):
     """Check a database for potential problems and inconsistencies."""
 
     db_path = Path(wd) / 'index.db'
-    quit(check(db_path))
+    quit(check(db_path, debug=ctx.obj['DEBUG']))
 
 
 @cli.command()
 @click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help='Path to the directory containing scraped data.')
-def upgrade_db(wd):
+@click.pass_context
+def upgrade_db(ctx, wd, **kwargs):
     """Upgrade an older database to the latest schema version."""
 
     db_path = Path(wd) / 'index.db'
-    quit(migrate(db_path))
+    quit(migrate(db_path, debug=ctx.obj['DEBUG']))
 
 
 def numpydoc2click(doc: str):

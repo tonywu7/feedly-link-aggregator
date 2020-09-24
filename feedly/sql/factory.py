@@ -175,11 +175,11 @@ def foreign_key_funcs(table, conf, config, *args, **kwargs):
         )
         update = (
             f'UPDATE {table} '
-            f'SET {local_column} == ({subquery}) '
+            f'SET {local_column} = ({subquery}) '
             f'WHERE {table}.rowid == ?'
         )
 
-        def do_update(conn, rowid):
+        def do_update(conn, rowid, update=update):
             conn.execute(update, (rowid,))
 
         update_funcs[local_column] = do_update

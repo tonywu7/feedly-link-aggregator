@@ -226,6 +226,12 @@ class DatabaseStorageProcess(ctx.Process):
             self.log.warn('Send SIGINT again to force unclean shutdown.')
             self.log.warn(_('Sending SIGINT again may cause some records to be lost.', color='yellow'))
 
+    def close(self):
+        try:
+            self.stream.close()
+        except BaseException as e:
+            self.err_queue.put_nowait(e)
+
     def run(self):
         signal.signal(signal.SIGINT, self.handle_sigint)
 
@@ -249,7 +255,7 @@ class DatabaseStorageProcess(ctx.Process):
         finally:
             self.log.info(_('Finalizing database', color='magenta'))
             self.closing.set()
-            self.stream.close()
+            self.close()
 
 
 class SQLiteExportProcessPipeline(SQLiteExportPipeline):
@@ -279,7 +285,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     self.log.warn('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
-                with watch_for_len('unprocessed record queue', buffer, self.maxsize * .75):
+                with watch_for_len('pending records', buffer, self.maxsize * .75):
                     buffer.appendleft(item)
 
         def write(self, *item):
