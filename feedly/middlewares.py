@@ -82,7 +82,7 @@ class FeedProbingDownloaderMiddleware:
         self.initialized = False
 
     def init(self, spider):
-        self.test_status = spider.config.get('FEED_SELECTION', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
+        self.test_status = spider.config.get('FEED_STATE_SELECT', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
         self.initialized = True
 
     async def process_request(self, request: ProbeRequest, spider):

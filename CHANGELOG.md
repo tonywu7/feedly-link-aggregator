@@ -3,7 +3,7 @@
 - **v0.10.5**
     - _On-the-fly persistence:_ Instead of writing scraped data to a temporary file, then digest that file once crawling is finished
     the program now write to databases while scraping, using a separate process.
-    - _Crawl dead feeds only:_ A new option `SELECT_FEED_STATE` that allows the selection/prioritization of dead/living feeds.
+    - _Crawl dead feeds only:_ A new option `FEED_STATE_SELECT` that allows the selection/prioritization of dead/living feeds.
     - ![#e5c07b](https://placehold.it/12/e5c07b/000000?text=+) This version introduces database schema changes. Database from
     v0.10.1 onwards can be upgraded to this version.
 - **v0.10.3**
