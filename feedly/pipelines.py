@@ -42,7 +42,11 @@ from .utils import colored as _
 from .utils import json_converters, watch_for_len, watch_for_timing
 
 NULL_TERMINATE = {'\0': True}
-ctx = get_context('forkserver')
+
+try:
+    ctx = get_context('forkserver')
+except ValueError:
+    ctx = get_context('spawn')
 
 
 class CompressedStreamExportPipeline:
