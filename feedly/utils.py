@@ -180,7 +180,7 @@ def watch_for_timing(name, limit=0):
 
 
 @contextmanager
-def watch_for_len(name, col, limit=0, comp=gt):
+def watch_for_len(name, col, limit=0, comp=gt, desc='fewer than'):
     try:
         yield
     finally:
@@ -188,11 +188,11 @@ def watch_for_len(name, col, limit=0, comp=gt):
         message = None
         level = None
         if limit and comp(size, limit):
-            message = colored(f'[Length violation] Length of {name} is {size}; '
-                              f'desired is {limit}.', color='yellow')
+            message = colored(f'[Length violation] Number of {name} is {size}; '
+                              f'desired is {desc} {limit:.0f}.', color='yellow')
             level = logging.INFO
         elif not limit:
-            message = f'Length of {name} is {size}.'
+            message = f'Number of {name} is {size}.'
             level = logging.DEBUG
         if message:
             logging.getLogger('profiler.containerlen').log(level, message)

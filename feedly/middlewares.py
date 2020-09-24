@@ -121,8 +121,9 @@ class FeedProbingDownloaderMiddleware:
             data = guard_json(response.text)
             if data.get('results'):
                 for feed in data['results']:
-                    valid_feeds[feed['feedId']] = None
-                    feed_info[feed] = self.feed_info(data)
+                    feed_id = feed['feedId']
+                    valid_feeds[feed_id] = None
+                    feed_info[feed_id] = self.feed_info(data)
 
         if self.test_status:
             await self.probe_feed_status(valid_feeds, download, spider)
