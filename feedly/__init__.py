@@ -45,7 +45,8 @@ def _config_logging():
     args, _ = parser.parse_known_args(sys.argv[1:])
 
     settings = [s.split('=', 1) for s in args.settings]
-    settings = {t[0]: t[1] for t in settings if len(t) == 2}
+    settings = [t for t in settings if len(t) == 2]
+    settings = {t[0]: t[1] for t in settings if t[0] in settings_default}
     settings = {**settings_default, **settings}
     if args.nolog:
         settings['LOG_ENABLED'] = False
@@ -79,18 +80,18 @@ def _config_logging():
         overrides += config['overrides']
         dictConfig(make_logging_config('feedly', *overrides, **config))
 
-    enabled = set(args.settings)
-    pos = []
-    for i in range(len(sys.argv)):
-        if sys.argv[i] == '--logfile':
-            pos.extend([i, i + 1])
-        if sys.argv[i] in enabled:
-            pos.extend([i - 1, i])
-    pos = sorted(pos, reverse=True)
-    for i in pos:
-        sys.argv.pop(i)
     if Path(sys.argv[0]).name == 'scrapy':
         # Is Scrapy command
+        enabled = {f'{k}={v}' for k, v in settings.items()}
+        pos = []
+        for i in range(len(sys.argv)):
+            if sys.argv[i] == '--logfile':
+                pos.extend([i, i + 1])
+            if sys.argv[i] in enabled:
+                pos.extend([i - 1, i])
+        pos = sorted(pos, reverse=True)
+        for i in pos:
+            sys.argv.pop(i)
         sys.argv.append('--nolog')
 
 
