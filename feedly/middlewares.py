@@ -24,11 +24,13 @@ import gzip
 import logging
 import pickle
 import time
-from concurrent.futures.thread import ThreadPoolExecutor
+from collections import deque
 from contextlib import suppress
+from threading import Event, Thread
 from typing import Callable, List
 from urllib.parse import urlsplit
 
+import simplejson as json
 from scrapy import Spider
 from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
@@ -38,10 +40,10 @@ from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
 
 from .feedly import build_api_url, get_feed_uri
-from .requests import ProbeRequest
+from .requests import FinishedRequest, ProbeRequest
 from .utils import LOG_LISTENER
 from .utils import colored as _
-from .utils import guard_json, is_rss_xml, wait, watch_for_timing
+from .utils import guard_json, is_rss_xml, wait
 
 
 def filter_domains(request: Request, spider: Spider):
@@ -176,19 +178,64 @@ class RequestPersistenceDownloaderMiddleware:
         return instance
 
     def __init__(self):
-        self.requests = {}
+        self.feed = None
+        self.instructions = deque()
         self.logger = logging.getLogger('worker.request')
-        self.executor = ThreadPoolExecutor(1, 'RequestPersistenceThread')
+        self.closing = Event()
+        self.thread = Thread(None, target=self.worker, name='RequestPersistenceThread',
+                             args=(self.closing,), daemon=False)
         self.future = None
         self.initialized = False
 
+    def worker(self, closing: Event):
+        while closing.wait(20):
+            try:
+                self.archive()
+            except Exception as e:
+                self.logger.error(e, exc_info=True)
+        self.archive()
+
+    def archive(self):
+        archive = self.load_archive()
+        for action, key, data in self.instructions:
+            if action == 'add':
+                archive[key] = data
+            if action == 'remove':
+                archive.pop(key, None)
+        self.instructions.clear()
+        self.dump_archive(archive)
+        self.dump_info({'crawling': self.feed})
+        return archive
+
+    def load_archive(self):
+        requests = {}
+        with suppress(EOFError, FileNotFoundError):
+            with gzip.open(self.archive_path, 'rb') as f:
+                requests = pickle.load(f)
+        return requests
+
+    def dump_archive(self, archive):
+        with gzip.open(self.archive_path, 'wb') as f:
+            pickle.dump(archive, f)
+
+    def load_info(self):
+        info = {}
+        with suppress(EOFError, FileNotFoundError, json.JSONDecodeError):
+            with open(self.info_path) as f:
+                info = json.load(f)
+        return info
+
+    def dump_info(self, info):
+        s = json.dumps(info)
+        with open(self.info_path, 'wb+', buffering=0) as f:
+            f.write(s.encode())
+
     def init(self, spider):
-        self.requests['_feed'] = spider.config['FEED']
-        path = spider.config['OUTPUT'] / 'requests.pickle.gz'
-        if path.exists():
-            with gzip.open(path, 'rb') as f, suppress(EOFError):
-                self.requests = pickle.load(f)
-        self.frequests = path
+        self.feed = spider.config['FEED']
+        output = spider.config['OUTPUT']
+        self.info_path = output / 'info.json'
+        self.archive_path = output / 'requests.pickle.gz'
+        self.thread.start()
         self.initialized = True
 
     def eager_process(self, request, spider):
@@ -210,74 +257,77 @@ class RequestPersistenceDownloaderMiddleware:
             return self._continue(meta, request, spider)
         if action == 'add':
             self._add_request(request)
-            self._dump_requests()
             if not idempotent:
                 del meta['_persist']
             return
         if action == 'remove':
             self._remove_request(request)
-            self._dump_requests()
             raise IgnoreRequest()
 
+    def process_exception(self, request: Request, exception, spider):
+        if isinstance(request, FinishedRequest):
+            return
+        if isinstance(exception, IgnoreRequest):
+            return FinishedRequest(meta=request.meta)
+
     def _continue(self, meta, request, spider):
-        meta['_requests'] = {**self.requests}
-        resume_feed = meta['_requests'].pop('_feed', '')
+        requests = {**self.load_archive()}
         feed = spider.config['FEED']
-        if meta['_requests'] and feed != resume_feed:
-            self.logger.info(_(f'Found unfinished crawl with {len(self.requests)} pending request(s)', color='cyan'))
+        resume_feed = self.load_info().get('crawling', '')
+
+        if requests and feed != resume_feed:
+            self.logger.info(_(f'Found unfinished crawl with {len(requests)} pending request(s)', color='cyan'))
             self.logger.info(_(f"Continue crawling '{resume_feed}'?", color='cyan'))
             self.logger.info(_(f"Start new crawl with '{feed}'?", color='cyan'))
             self.logger.info(_('Or exit?', color='cyan'))
             action = 'x'
-        elif meta['_requests']:
+        elif requests:
             action = 'c'
         else:
             action = 's'
+
+        self.feed = resume_feed
         LOG_LISTENER.stop()
         while action not in 'cse':
             action = input('(continue/start/exit) [c]: ')[:1]
         LOG_LISTENER.start()
+
         if action == 'e':
-            spider.crawler.engine.close_spider(spider, 'exit')
             raise IgnoreRequest()
         elif action == 's':
-            meta['_requests'] = {}
-            self.requests.clear()
-            self.requests['_feed'] = feed
+            for k in requests:
+                self.instructions.append(('remove', k, None))
+            requests = {}
+            self.feed = feed
+
+        meta['_requests'] = requests
         del meta['_persist']
         return Response(url=request.url, request=request)
 
     def _add_request(self, request: Request):
-        self.requests[request.meta['pkey']] = (
-            request.__class__, {
-                'url': request.url,
-                'method': request.method,
-                'callback': request.callback.__name__,
-                'meta': {**request.meta, '_time_pickled': time.perf_counter()},
-                'priority': request.priority,
-            },
-        )
+        for_pickle = {
+            'url': request.url,
+            'method': request.method,
+            'callback': request.callback.__name__,
+            'meta': {**request.meta, '_time_pickled': time.perf_counter()},
+            'priority': request.priority,
+        }
+        self.instructions.append(('add', request.meta['pkey'],
+                                  (request.__class__, for_pickle)))
 
     def _remove_request(self, request: Request, spider=None):
         if 'pkey' not in request.meta:
             return
-        self.requests.pop(request.meta['pkey'], None)
+        self.instructions.append(('remove', request.meta['pkey'], None))
 
-    def _dump_requests(self):
-        with watch_for_timing('Creating future', 0.1):
-            if self.future:
-                self.future.cancel()
-            self.future = self.executor.submit(self._write)
-
-    def _write(self):
-        with gzip.open(self.frequests, 'wb') as f:
-            pickle.dump(self.requests, f)
-
-    def _close(self, spider, reason: str):
-        if len(self.requests) - 1:
-            self.logger.info(_(f'# of requests persisted to filesystem: {len(self.requests) - 1}', color='cyan'))
-        self._dump_requests()
-        self.executor.shutdown(True)
+    def _close(self, spider=None, reason=None):
+        if self.closing.is_set():
+            return
+        self.closing.set()
+        self.thread.join(2)
+        archive = self.archive()
+        if len(archive):
+            self.logger.info(_(f'# of requests persisted to filesystem: {len(archive)}', color='cyan'))
 
 
 class RequestFilterDownloaderMiddleware:

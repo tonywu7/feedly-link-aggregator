@@ -47,7 +47,7 @@ class ProbeRequest(Request):
     def __init__(self, *, url, callback, source=None, **kwargs):
         meta = kwargs.pop('meta', {})
         meta['_persist'] = 'add'
-        meta['pkey'] = meta['search_query']
+        meta['pkey'] = (meta['search_query'], 'search')
         super().__init__(url=url, callback=callback, meta=meta, **kwargs)
         self.priority = source.priority - 1 if source else self.priority - 1
 
