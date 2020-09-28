@@ -22,6 +22,8 @@
 
 import logging
 import os
+import re
+import shutil
 import sqlite3
 from functools import reduce
 from pathlib import Path
@@ -29,11 +31,10 @@ from pathlib import Path
 from setuptools.version import pkg_resources
 
 from ..utils import colored as _
-from ..utils import findpath
-from . import SCHEMA_VERSION
-from .metadata import models, tables
+from ..utils import findpath, randstr
+from .db import db
+from .factory import DatabaseVersionError
 from .stream import DatabaseWriter
-from .utils import DatabaseVersionError, is_locked, verify_version
 
 MIGRATIONS = Path(Path(__file__).with_name('migrations')).resolve(True)
 Version = pkg_resources.parse_version
@@ -42,36 +43,69 @@ Version = pkg_resources.parse_version
 def check(db_path, debug=False):
     log = logging.getLogger('db.check')
     try:
-        DatabaseWriter(db_path, tables, models, 0, debug=debug).close()
+        writer = DatabaseWriter(db_path, db, 0, debug=debug, cache_path=':memory:')
+        writer._verify(writer._main)
+        writer.close()
         log.info(_('Database is OK.', color='green'))
     except DatabaseVersionError as exc:
         log.critical(exc)
         log.error(_('Run `python -m feedly upgrade-db` to upgrade it to the current version.', color='cyan'))
+        return 1
     except Exception as exc:
         log.critical(exc, exc_info=True)
         log.error(_('Database has irrecoverable inconsistencies.', color='red'))
+        return 1
+    else:
+        return 0
 
 
-def migrate(db_path, debug=False, version=SCHEMA_VERSION):
+def merge(output, *db_paths, debug=False):
+    log = logging.getLogger('db.merge')
+    for path in db_paths:
+        log.info(_(f'Checking database at {path}', color='cyan'))
+        exc = check(path, debug)
+        if exc:
+            return exc
+    output = Path(output)
+    db_paths = [Path(p) for p in db_paths]
+    initial = db_paths[0]
+    log.info(_(f'Copying initial database {initial}', color='cyan'))
+    shutil.copyfile(initial, output)
+    out = DatabaseWriter(output, db, debug=debug, buffering=0, cache_path=':memory:')
+    for path in db_paths[1:]:
+        log.info(_(f'Copying database {path}', color='cyan'))
+        cp = output.with_name(randstr(8) + '.db')
+        shutil.copyfile(path, cp)
+        log.info(_(f'Merging {path}', color='cyan'))
+        out._merge_other(cp)
+        cp.unlink()
+        cp.with_suffix('.db-shm').unlink()
+        cp.with_suffix('.db-wal').unlink()
+    out.report()
+    out.close()
+    return 0
+
+
+def migrate(db_path, debug=False, version=db.version):
     conn = sqlite3.Connection(db_path, isolation_level=None)
     log = logging.getLogger('db.migrate')
     if debug:
         conn.set_trace_callback(log.debug)
 
-    if is_locked(conn):
+    if db.is_locked(conn):
         log.error('Database was left in a partially consistent state.')
         log.error('Run `python -m feedly check-db` to fix it first.')
         return 1
 
     outdated = False
     try:
-        verify_version(conn, version)
+        db.verify_version(conn)
     except DatabaseVersionError as e:
         outdated = e.db
 
     if not outdated:
         log.info(_('Database version is already up-to-date.', color='green'))
-        return
+        return 0
 
     source_ver = Version(outdated)
     target_ver = Version(version)
@@ -89,7 +123,7 @@ def migrate(db_path, debug=False, version=SCHEMA_VERSION):
         reduce(lambda x, y: scripts.append((x, y, f'{x}_{y}.sql')) or y, path)
     else:
         log.error(f'This version of the program no longer supports migrating from {source_ver} to {target_ver}')
-        return
+        return 1
 
     for old, new, cmd in scripts:
         log.info(f'Upgrading database schema from v{old} to v{new}. This may take a long time.')
@@ -108,3 +142,18 @@ def migrate(db_path, debug=False, version=SCHEMA_VERSION):
     log.info(_('Compacting database... This may take a long time.', color='cyan'))
     conn.execute('VACUUM;')
     log.info(_('Done.', color='green'))
+    return 0
+
+
+def leftovers(wd, debug=False):
+    log = logging.getLogger('db.leftovers')
+    main = Path(wd) / 'index.db'
+    tmp_pattern = re.compile(r'.*~tmp-[0-9a-f]{8}\.db$')
+    for temp in os.listdir(wd):
+        if tmp_pattern.match(temp):
+            temp = main.with_name(temp)
+            log.info(f'Found unmerged temp database {temp}')
+            writer = DatabaseWriter(main, db, 0, debug=debug, cache_path=temp)
+            writer.merge()
+            writer.close()
+            writer.cleanup()

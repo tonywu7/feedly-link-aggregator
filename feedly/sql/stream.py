@@ -23,109 +23,225 @@
 import logging
 import sqlite3
 from collections import deque
+from contextlib import suppress
+from pathlib import Path
+from typing import Union
 
-from ..utils import watch_for_timing
-from . import SCHEMA_VERSION
-from .factory import create_helpers
-from .utils import (count_rows, create_all, create_indices, drop_indices,
-                    is_locked, mark_as_locked, mark_as_unlocked,
-                    verify_version)
+from ..utils import append_stem, randstr, watch_for_timing
+from .factory import Database
 
-BEGIN = 'BEGIN;'
-END = 'END;'
-FOREIGN_KEY_ON = 'PRAGMA foreign_keys = ON;'
-FOREIGN_KEY_OFF = 'PRAGMA foreign_keys = OFF;'
+_PathLike = Union[str, Path]
 
 
 class DatabaseWriter:
-    def __init__(self, path, tables, models, buffering, debug=False):
-        self.db_path = path
+    def __init__(self, path: _PathLike, database: Database, buffering: int,
+                 debug=False, cache_path=None, silent=False):
         self.log = logging.getLogger('db.writer')
+        if silent:
+            self.log.setLevel(logging.WARNING)
 
-        conn = sqlite3.connect(path, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        self._queues = {t: deque() for t in tables}
-        self._conn = conn
+        main_db = Path(path)
+        cache_db = cache_path and Path(cache_path) or append_stem(path, f'~tmp-{randstr(8)}')
 
-        self._closed = False
-
-        self._setup_debug(debug)
-
-        verify_version(conn, SCHEMA_VERSION)
-        create_all(conn)
-        drop_indices(conn)
-        conn.execute(FOREIGN_KEY_OFF)
-        self._lock_db()
-
-        self._tables = tables
         self.buffering = buffering
-        self._recordcount = 0
+        self.db = database
+        self._queues = {t: deque() for t in database.tablemap}
 
-        self._load_helpers(models)
-        self._load_foreign_keys()
-        for create_trigger in self._create_trigger.values():
-            create_trigger(conn)
+        self._main = self._connect(main_db, 'main', debug)
+        self._cache = self._connect(cache_db, 'temp', debug)
+        self._paths = {self._main: main_db, self._cache: cache_db}
+
+        self._corked = True
+        self._closed = False
+        self._recordcount = 0
+        self._rowcounts = {conn: {t: None for t in database.tablemap}
+                           for conn in (self._main, self._cache)}
+
+        self._bind_tables()
+        self.report()
+        self.uncork()
         self.flush()
 
-        self._rowcounts = {t: None for t in tables}
-        self._tally()
-
-    def _lock_db(self):
-        unclean = False
-        if is_locked(self._conn):
-            self.log.warn('Database lock table exists')
-            unclean = True
-        mark_as_locked(self._conn)
-        if unclean:
-            self.log.warn('Previous crawler did not exit properly')
-
-    def _setup_debug(self, debug):
+    def _connect(self, path: _PathLike, name=None, debug=False):
+        conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+        conn.row_factory = sqlite3.Row
         if debug:
-            sql_log = logging.getLogger('db.sql')
-            self._conn.set_trace_callback(sql_log.debug)
-            if debug is not True:
-                sql_log.propagate = False
-                handler = logging.StreamHandler(open(debug, 'w+'))
-                sql_log.addHandler(handler)
+            self._setup_debug(conn, name, debug)
 
-    def _load_foreign_keys(self):
-        update_funcs = {}
-        for table in self._tables:
-            update_funcs[table] = conf = {}
-            for row in self._conn.execute(f'PRAGMA foreign_key_list({table})'):
-                conf[row['id']] = self._update_foreign[table][row['from']]
-        self._update_foreign = update_funcs
+        self.db.verify_version(conn)
+        self.db.set_version(conn)
+        self.db.create_all(conn)
+        self.db.create_indices(conn)
+        return conn
 
-    def _load_helpers(self, models):
-        self._insert_into = {}
-        self._remove_duplicate = {}
-        self._update_foreign = {}
-        self._create_trigger = {}
-        self._drop_trigger = {}
-        helpers = {
-            'ins': self._insert_into,
-            'dup': self._remove_duplicate,
-            'ufk': self._update_foreign,
-            'cft': self._create_trigger,
-            'dft': self._drop_trigger,
-        }
-        for table, funcs in create_helpers(models).items():
-            for k, t in helpers.items():
-                t[table] = funcs[k]
+    def _lock_db(self, conn: sqlite3.Connection):
+        self.log.debug(f'Locking database {self._paths[conn]}')
+        if self.db.is_locked(conn):
+            self.log.warn('Database lock table exists')
+            self.log.warn('Previous crawler did not exit properly')
+        self.db.mark_as_locked(conn)
 
-    def _begin(self):
+    def _unlock_db(self, conn: sqlite3.Connection):
+        self.log.debug(f'Unlocking database {self._paths[conn]}')
+        self.db.mark_as_unlocked(conn)
+
+    def _setup_debug(self, conn: sqlite3.Connection, name, debug_out):
+        sql_log = logging.getLogger(f'db.sql.{name}')
+        sql_log.setLevel(logging.DEBUG)
+        conn.set_trace_callback(sql_log.debug)
+        if not isinstance(debug_out, bool):
+            sql_log.propagate = False
+            path = append_stem(Path(debug_out), f'-{name}')
+            file = open(path, 'w+')
+            handler = logging.StreamHandler(file)
+            sql_log.addHandler(handler)
+
+    def _bind_tables(self):
+        for table in self.db.tables:
+            table.bind_foreign_key(self._cache)
+            table.bind_offset(self._main)
+
+    def _foreign_key_off(self, conn: sqlite3.Connection):
+        conn.execute('PRAGMA foreign_keys = OFF')
+        self.log.debug(f'Foreign key is OFF for {self._paths[conn]}')
+
+    def _foreign_key_on(self, conn: sqlite3.Connection):
+        conn.execute('PRAGMA foreign_keys = ON')
+        self.log.debug(f'Foreign key is ON for {self._paths[conn]}')
+
+    def _rebuild_index(self, conn: sqlite3.Connection):
+        self.log.info('Rebuilding index')
+        self.db.create_indices(conn)
+
+    def _begin(self, conn: sqlite3.Connection):
         try:
-            self._conn.execute(BEGIN)
-            self.log.debug('Began new transaction')
+            conn.execute('BEGIN')
+            self.log.debug(f'Began new transaction on {self._paths[conn]}')
         except sqlite3.OperationalError:
             pass
 
-    def _end(self):
+    def _begin_exclusive(self, conn: sqlite3.Connection):
+        while True:
+            try:
+                conn.execute('BEGIN EXCLUSIVE')
+                self.log.debug('Began exclusive transaction'
+                               f' on {self._paths[conn]}')
+            except sqlite3.OperationalError:
+                self.log.warn('Cannot acquire exclusive write access')
+                self.log.warn('Another program is writing to the database')
+                self.log.warn('Retrying...')
+            else:
+                return
+
+    def _apply_changes(self):
+        cache = self._cache
+        for name, table in self.db.tablemap.items():
+            q = self._queues[name]
+            if not q:
+                continue
+            try:
+                table.insert(cache, q)
+            except sqlite3.IntegrityError:
+                cache.rollback()
+                raise
+            else:
+                cache.commit()
+                self._recordcount -= len(q)
+                q.clear()
+
+    def _verify(self, conn: sqlite3.Connection):
+        for table in self.db.tables:
+            table.drop_proxy(conn)
+            table.restore_original(conn)
+        self.reconcile()
+        self.deduplicate()
+        self._rebuild_index(conn)
+        self._foreign_key_on(conn)
+        self._optimize(conn)
+        self._unlock_db(conn)
+
+    def _optimize(self, conn: sqlite3.Connection):
+        self.log.debug(f'Optimizing {self._paths[conn]}')
+        conn.execute('PRAGMA optimize')
+
+    def _merge_other(self, other=None):
+        main = self._main
+        if not other:
+            other_db = self._cache
+            other = str(self._paths[other_db])
+        else:
+            other = str(other)
+            other_db = sqlite3.connect(other, isolation_level=None)
+        max_rowids = self.db.get_max_rowids(main)
+        self._foreign_key_off(main)
+        self._begin_exclusive(main)
+        self._lock_db(main)
+        self.db.attach(main, other)
+        self.log.debug(f'Attached {other} to {self._paths[main]}')
+
         try:
-            self._conn.execute(END)
-            self.log.debug('Ended new transaction')
-        except sqlite3.OperationalError:
-            pass
+            self.log.debug('Matching existing records')
+            with watch_for_timing('Matching'):
+                for table in self.db.tables:
+                    self.log.debug(f'Matching {table}')
+                    table.match_primary_keys(main)
+                    table.match_foreign_keys(main)
+
+            self.log.debug('Dropping indices')
+            self.db.drop_indices(main)
+
+            self.log.debug('Merging into main database')
+            with watch_for_timing('Merging'):
+                for table in self.db.tables:
+                    self.log.debug(f'Merging {table}')
+                    table.dedup_primary_keys(main)
+                    table.merge_attached(main)
+
+            self.log.debug('Deduplicating records')
+            with watch_for_timing('Deduplicating'):
+                for table in self.db.tables:
+                    self.log.debug(f'Deduplicating {table}')
+                    table.dedup(main, max_rowids[table.name])
+
+        except sqlite3.IntegrityError:
+            main.rollback()
+            raise
+
+        else:
+            self.log.debug('Committing changes')
+            main.commit()
+            self.db.detach(main)
+            self._foreign_key_on(main)
+            self._optimize(main)
+            self.log.debug('Finalizing merge')
+
+        finally:
+            self.log.debug('Removing transcient data')
+            with watch_for_timing('Restoring'):
+                for table in self.db.tables:
+                    table.restore_original(other_db)
+            self._rebuild_index(main)
+            self._unlock_db(main)
+
+    def uncork(self):
+        if not self._corked:
+            return
+        conn = self._cache
+
+        self._lock_db(conn)
+        self.db.drop_indices(conn)
+        self._foreign_key_off(conn)
+        for table in self.db.tables:
+            table.create_proxy(conn)
+        self._corked = False
+
+    def cork(self):
+        if self._corked:
+            return
+        self.flush()
+        conn = self._cache
+        self._verify(conn)
+        self._corked = True
 
     def write(self, table, item):
         self._queues[table].append(item)
@@ -133,86 +249,83 @@ class DatabaseWriter:
         if self.buffering and self._recordcount >= self.buffering:
             self.flush()
 
-    def _apply_changes(self):
-        for table in self._tables:
-            q = self._queues[table]
-            if not q:
-                continue
-            try:
-                self._insert_into[table](self._conn, q)
-            except sqlite3.IntegrityError:
-                self._conn.rollback()
-                raise
-            else:
-                self._conn.commit()
-                self._recordcount -= len(q)
-                q.clear()
-
     def flush(self):
+        if self._corked:
+            return
         if self._recordcount:
             self.log.info(f'Saving {self._recordcount} records')
             with watch_for_timing('Flushing'):
                 self._apply_changes()
-        self._end()
-        self._begin()
+        self._cache.commit()
+        self._begin(self._cache)
 
     def deduplicate(self):
+        cache = self._cache
         self.log.info('Deduplicating database records')
         try:
             with watch_for_timing('Deduplicating'):
-                for table in self._tables:
-                    self._remove_duplicate[table](self._conn)
+                for table in self.db.tables:
+                    table.dedup(cache)
         except sqlite3.IntegrityError:
-            self._conn.rollback()
-            self._end()
+            cache.rollback()
             raise
-        else:
-            self._conn.commit()
+        finally:
+            cache.commit()
 
     def reconcile(self):
+        cache = self._cache
         self.log.info('Enforcing internal references')
         try:
-            funcs = self._update_foreign
             with watch_for_timing('Fixing foreign keys'):
-                mismatches = self._conn.execute('PRAGMA foreign_key_check;')
+                mismatches = cache.execute('PRAGMA foreign_key_check')
                 for table, rowid, parent, fkid in mismatches:
-                    funcs[table][fkid](self._conn, rowid)
+                    self.db.tablemap[table].update_fk(cache, fkid, rowid)
         except sqlite3.IntegrityError:
-            self._conn.rollback()
-            self._end()
+            cache.rollback()
             raise
         else:
-            self._conn.commit()
+            cache.commit()
+
+    def merge(self):
+        self.cork()
+        self.log.info('Merging new data into main database')
+        self._merge_other()
+        self.report()
 
     def close(self):
-        if self._closed:
-            return
-        self.flush()
-        conn = self._conn
-
-        for drop_trigger in self._drop_trigger.values():
-            drop_trigger(conn)
-        self.reconcile()
-        self.deduplicate()
-
-        create_indices(conn)
-        conn.execute(FOREIGN_KEY_ON)
-
-        self._tally()
-        mark_as_unlocked(self._conn)
-        conn.close()
+        self._main.close()
+        self._cache.close()
+        self._corked = True
         self._closed = True
 
-    def _tally(self):
-        count = {t: count_rows(self._conn, t) for t in self._tables}
-        diff = {t: v is not None and count[t] - v for t, v in self._rowcounts.items()}
-        self.log.info('Database statistics:')
-        for table in self._tables:
+    def interrupt(self):
+        self._main.interrupt()
+        self._cache.interrupt()
+
+    def cleanup(self):
+        cache = self._paths[self._cache]
+        shm = cache.with_suffix('.db-shm')
+        wal = cache.with_suffix('.db-wal')
+        with suppress(FileNotFoundError):
+            cache.unlink()
+            shm.unlink()
+            wal.unlink()
+
+    def _tally(self, conn):
+        count = self.db.count_rows(conn)
+        diff = {t: v is not None and count[t] - v for t, v in self._rowcounts[conn].items()}
+        msg = ['Database stats:']
+        for table in self.db.tablemap:
             if diff[table] is not False:
-                self.log.info(f'  {table}: {count[table]} ({diff[table]:+})')
+                msg.append(f'  {table}: {count[table]} ({diff[table]:+})')
             else:
-                self.log.info(f'  {table}: {count[table]}')
-        self._rowcounts.update(count)
+                msg.append(f'  {table}: {count[table]}')
+        self._rowcounts[conn].update(count)
+        return msg
+
+    def report(self):
+        for line in self._tally(self._main):
+            self.log.info(line)
 
     def __enter__(self):
         return self
@@ -228,15 +341,3 @@ class DatabaseWriter:
         if tb is not None:
             val = val.with_traceback(tb)
         raise val
-
-    @property
-    def execute(self):
-        return self._conn.execute
-
-    @property
-    def executemany(self):
-        return self._conn.executemany
-
-    @property
-    def executescript(self):
-        return self._conn.executescript

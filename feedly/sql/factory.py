@@ -20,6 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import sqlite3
 from itertools import chain
 
 COLUMNS = 'columns'
@@ -39,165 +40,467 @@ TRANSFORM = {
 }
 
 
-def insert_funcs(table, conf, *args, **kwargs):
-    if AUTOINCREMENT in conf:
-        columns = [c for c in conf[COLUMNS] if c != conf[AUTOINCREMENT][0]]
-    else:
-        columns = conf[COLUMNS]
-
-    keys = ', '.join(columns)
-    subs = ', '.join([f':{c}' for c in columns])
-    insert = f'INSERT INTO {table} ({keys}) VALUES ({subs})'
-
-    def do_insert(conn, data):
-        conn.executemany(insert, data)
-
-    return {'ins': do_insert}
+def no_op(*args, **kwargs):
+    pass
 
 
-def dedup_funcs(table, conf, *args, **kwargs):
-    columns = set(chain(*conf.get(UNIQUE, []), conf.get(PRIMARY_KEY)))
-    columns.discard(conf.get(AUTOINCREMENT, [None])[0])
-    if not columns:
-        def do_dedup(conn):
-            conn.execute(delete)
-        return do_dedup
+class Database:
+    def __init__(self, descriptor):
+        models = descriptor['models']
+        for model in models.values():
+            for opt in model:
+                model[opt] = TRANSFORM[opt](model[opt])
+        self.tables = [Table(name, models) for name in descriptor['order']]
+        Table.associate(*self.tables)
 
-    keys = ', '.join(columns)
-    func = conf[INFO].get('dedup', 'min')
-    delete = (f'DELETE FROM {table} WHERE rowid NOT IN '
-              f'(SELECT {func}(rowid) FROM {table} GROUP BY {keys})')
+        self.tablemap = {t.name: t for t in self.tables}
+        self.version = descriptor['version']
+        self.descriptor = descriptor
 
-    def do_dedup(conn):
-        conn.execute(delete)
+    def set_version(self, conn: sqlite3.Connection):
+        ver = self.descriptor['versioning']
+        conn.execute(ver['create'])
+        conn.execute(ver['insert'], (self.version,))
 
-    return {'dup': do_dedup}
+    def create_all(self, conn: sqlite3.Connection):
+        for stmt in self.descriptor['init']:
+            conn.execute(stmt)
+
+    def create_indices(self, conn: sqlite3.Connection):
+        for stmt in self.descriptor['indices'].values():
+            conn.execute(stmt)
+
+    def drop_indices(self, conn: sqlite3.Connection):
+        for index in self.descriptor['indices']:
+            conn.execute(f'DROP INDEX IF EXISTS {index}')
+
+    def verify_version(self, conn: sqlite3.Connection):
+        try:
+            db_ver = conn.execute('SELECT version FROM __version__;').fetchone()
+        except sqlite3.OperationalError:
+            db_ver = None
+        if not db_ver:
+            tablecount = conn.execute("SELECT count(name) FROM sqlite_master WHERE type='table'").fetchone()[0]
+            if tablecount:
+                raise DatabaseNotEmptyError()
+        else:
+            db_ver = db_ver[0]
+            if db_ver != self.version:
+                raise DatabaseVersionError(db=db_ver, target=self.version)
+
+    def mark_as_locked(self, conn: sqlite3.Connection):
+        conn.execute('CREATE TABLE IF NOT EXISTS lock (locked INTEGER)')
+
+    def mark_as_unlocked(self, conn: sqlite3.Connection):
+        conn.execute('DROP TABLE IF EXISTS lock')
+
+    def is_locked(self, conn: sqlite3.Connection):
+        exists = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name == 'lock'")
+        return len(list(exists))
+
+    def count_rows(self, conn: sqlite3.Connection):
+        count = {}
+        for table in self.tablemap:
+            row = conn.execute(f'SELECT count(id) FROM {table}').fetchone()
+            if row is None:
+                row = [None]
+            count[table] = row[0] or 0
+        return count
+
+    def get_max_rowids(self, conn: sqlite3.Connection):
+        max_id = {}
+        for table in self.tablemap:
+            rowid = conn.execute(f'SELECT max(rowid) FROM {table}').fetchone()
+            if rowid is None:
+                rowid = [None]
+            max_id[table] = rowid[0] or 0
+        return max_id
+
+    def attach(self, conn: sqlite3.Connection, path):
+        conn.execute('ATTACH ? AS secondary', (path,))
+
+    def detach(self, conn: sqlite3.Connection):
+        conn.execute('DETACH secondary')
 
 
-def foreign_key_proxies(table, conf, config, *args, **kwargs):
-    if not conf[FOREIGN_KEYS]:
+class Table:
+    def __init__(self, name, models):
+        self.name = name
+        self.model = model = models[name]
+        self.info = model[INFO]
+        self.columns = columns = model[COLUMNS]
+        self.rowid = rowid = model[AUTOINCREMENT][0]
+        self.keys = [c for c in columns if c != rowid]
+        self.primary_key = pk = model[PRIMARY_KEY]
+        self.unique_comp = unique = model[UNIQUE]
+        self.signature = set(chain(*unique, pk)) - {rowid}
+        self.foreign_keys = model[FOREIGN_KEYS]
+
+    @classmethod
+    def associate(cls, *tables):
+        tablemap = {table.name: table for table in tables}
+        for table in tables:
+            table: cls
+            table._build_insert()
+            table._build_offset_trigger()
+            table._build_dedup()
+            table._build_update_foreign_key(tablemap)
+            table._build_foreign_key_proxy(tablemap)
+            table._build_merge()
+            table._build_match_pk()
+            table._build_match_fk()
+            table._build_restore_original()
+
+    def _build_insert(self):
+        keys = self.keys
+        names = ', '.join(keys)
+        subs = ', '.join([f':{c}' for c in keys])
+        insert = f'INSERT INTO {self.name} ({names}) VALUES ({subs})'
+
+        def do_insert(conn, data):
+            conn.executemany(insert, data)
+        self.insert = do_insert
+
+    def _build_offset_trigger(self):
+        if not self.rowid:
+            self.create_offset_trigger = no_op
+            self.drop_offset_trigger = no_op
+            self.bind_offset = no_op
+            return
+
+        trigger_name = f'offset_{self.name}_{self.rowid}'
+
+        def do_create(conn):
+            conn.execute(stmt)
+
+        def do_drop(conn):
+            conn.execute(f'DROP TRIGGER IF EXISTS {trigger_name}')
+
+        def bind(conn):
+            nonlocal stmt
+            max_id = conn.execute(f'SELECT max(rowid) FROM {self.name}')
+            max_id = max_id.fetchone()[0]
+            if not max_id:
+                self.create_offset_trigger = no_op
+                return
+            stmt = (f'CREATE TRIGGER IF NOT EXISTS {trigger_name} '
+                    f'AFTER INSERT ON {self.name} '
+                    f'WHEN (SELECT max(rowid) FROM {self.name}) == 1 BEGIN '
+                    f'UPDATE {self.name} SET {self.rowid} = {self.rowid} + {max_id} '
+                    f'WHERE {self.rowid} == NEW.{self.rowid}; END;')
+
+        stmt = None
+        self.create_offset_trigger = do_create
+        self.drop_offset_trigger = do_drop
+        self.bind_offset = bind
+
+    def _build_dedup(self):
+        if not self.signature:
+            self.dedup = no_op
+            return
+
+        keys = ', '.join(self.signature)
+        func = self.info.get('dedup', 'min')
+        comp = '<=' if func == 'max' else '>'
+        delete = (f'DELETE FROM {self.name} WHERE rowid {comp} ? AND rowid NOT IN '
+                  f'(SELECT {func}(rowid) FROM {self.name} GROUP BY {keys})')
+
+        def do_dedup(conn, offset=0):
+            conn.execute(delete, (offset,))
+        self.dedup = do_dedup
+
+    def _build_update_foreign_key(self, others):
+        if not self.foreign_keys:
+            self.update_fk = no_op
+            self.bind_foreign_key = no_op
+            return
+
+        update_funcs = {}
+        columns = []
+
+        for local_column, remote_table, remote_column in self.foreign_keys:
+            columns.append(local_column)
+
+            local = f'{self.name}.{local_column}'
+            remote = f'{remote_table}.{remote_column}'
+
+            remote_signature = list(others[remote_table].signature)
+            if len(remote_signature) != 1:
+                raise NotImplementedError
+            remote_signature = f'{remote_table}.{remote_signature[0]}'
+
+            subquery = (
+                f'SELECT {remote} FROM {remote_table} '
+                f'WHERE {remote_signature} == {local}'
+            )
+            update = (
+                f'UPDATE {self.name} '
+                f'SET {local_column} = ({subquery}) '
+                f'WHERE {self.name}.rowid == ?'
+            )
+
+            def do_update(conn, rowid, update=update):
+                conn.execute(update, (rowid,))
+
+            update_funcs[local_column] = do_update
+
+        def do_update(conn, fkid, rowid):
+            update_funcs[fkid](conn, rowid)
+        self.update_fk = do_update
+
+        def bind(conn):
+            for row in conn.execute(f'PRAGMA foreign_key_list({self.name})'):
+                update_funcs[row['id']] = update_funcs[row['from']]
+        self.bind_foreign_key = bind
+
+    def _build_foreign_key_proxy(self, others):
+        if not self.foreign_keys:
+            self.create_proxy = no_op
+            self.drop_proxy = no_op
+            return
+
+        view_name = f'proxy_{self.name}'
+        trigger_name = f'foreign_cascade_{self.name}'
+
+        columns = set(self.keys)
+
+        local_columns = set()
+        static_columns = set()
+        subqueries = {}
+        indices = {}
+
+        for local_column, remote_table, remote_column in self.foreign_keys:
+            remote_signature = list(others[remote_table].signature)
+            if len(remote_signature) != 1:
+                raise NotImplementedError
+            remote_signature = remote_signature[0]
+            local = f'NEW.{local_column}'
+            remote = f'{remote_table}.{remote_column}'
+            referenced = f'{remote_table}.{remote_signature}'
+
+            local_columns.add(local_column)
+            subqueries[local_column] = (
+                f'coalesce('
+                f'(SELECT {remote} FROM {remote_table} '
+                f'WHERE {referenced} == {local} '
+                f'ORDER BY rowid LIMIT 1), '
+                f'{local})'
+            )
+            index_name = f'tmp_ix_{remote_table}_{remote_signature}'
+            indices[index_name] = (
+                f'CREATE INDEX IF NOT EXISTS {index_name} '
+                f'ON {remote_table} ({remote_signature});'
+            )
+
+        static_columns = columns - local_columns
+        subqueries.update({c: f'NEW.{c}' for c in static_columns})
+        columns = list(columns)
+        subqueries = [subqueries[c] for c in columns]
+
+        create_trigger = (
+            f'CREATE TRIGGER IF NOT EXISTS {trigger_name} '
+            f'INSTEAD OF INSERT ON {view_name} BEGIN '
+            f'INSERT INTO {self.name} ({", ".join(columns)}) '
+            f"VALUES ({', '.join(subqueries)}); END;"
+        )
+        drop_trigger = f'DROP TRIGGER IF EXISTS {trigger_name}'
+
+        create_view = f'CREATE VIEW IF NOT EXISTS {view_name} AS SELECT * FROM {self.name};'
+        drop_view = f'DROP VIEW IF EXISTS {view_name};'
+
+        indices = [(v, f'DROP INDEX IF EXISTS {k}') for k, v in indices.items()]
+
         def create(conn):
-            pass
+            conn.execute(create_view)
+            conn.execute(create_trigger)
+            for create_index, _ in indices:
+                conn.execute(create_index)
 
         def drop(conn):
-            pass
+            for _, drop_index in indices:
+                conn.execute(drop_index)
+            conn.execute(drop_trigger)
+            conn.execute(drop_view)
 
-        return {'cft': create, 'dft': drop}
+        name = self.name
+        self.name = view_name
+        self._build_insert()
+        self.name = name
 
-    view_name = f'proxy_{table}'
-    trigger_name = f'fkey_cascade_{table}'
+        self.create_proxy = create
+        self.drop_proxy = drop
 
-    columns = set(conf[COLUMNS])
-    columns.discard(conf.get(AUTOINCREMENT, [None])[0])
+    def _build_merge(self):
+        columns = self.columns if not self.foreign_keys else self.keys
+        names = ', '.join(columns)
+        insert = (f'INSERT INTO {self.name} ({names}) '
+                  f'SELECT {names} FROM secondary.{self.name}')
 
-    local_columns = set()
-    static_columns = set()
-    subqueries = {}
-    indices = {}
+        def do_merge(conn):
+            conn.execute(insert)
+        self.merge_attached = do_merge
 
-    for local_column, remote_table, remote_column in conf[FOREIGN_KEYS]:
-        remote_identity = config[remote_table].get(UNIQUE, [])
-        if len(remote_identity) != 1 or len(remote_identity[0]) != 1:
-            raise ValueError
-        remote_identity = remote_identity[0][0]
-        local = f'NEW.{local_column}'
-        remote = f'{remote_table}.{remote_column}'
-        referenced = f'{remote_table}.{remote_identity}'
+    def _build_match_pk(self):
+        if self.foreign_keys or not self.primary_key or not self.signature:
+            self.match_primary_keys = no_op
+            self.dedup_primary_keys = no_op
+            return
 
-        local_columns.add(local_column)
-        subqueries[local_column] = (
-            f'coalesce('
-            f'(SELECT {remote} FROM {remote_table} '
-            f'WHERE {referenced} == {local} '
-            f'ORDER BY rowid LIMIT 1), '
-            f'{local})'
-        )
-        index_name = f'tmp_ix_{remote_table}_{remote_identity}'
-        indices[index_name] = (
-            f'CREATE INDEX IF NOT EXISTS {index_name} '
-            f'ON {remote_table} ({remote_identity});'
-        )
+        main_table = f'main_{self.name}'
+        temp_table_name = f'original_{self.name}'
+        secondary_table = f'secondary.{self.name}'
+        temp_table = f'secondary.{temp_table_name}'
 
-    static_columns = columns - local_columns
-    subqueries.update({c: f'NEW.{c}' for c in static_columns})
-    columns = list(columns)
-    subqueries = [subqueries[c] for c in columns]
+        auto_inc_column = self.rowid
+        var_columns = list(set(self.primary_key) - {auto_inc_column})
+        const_columns = self.columns.keys() - var_columns - {auto_inc_column}
+        columns = [*const_columns, *var_columns,
+                   *[f'_{c}_' for c in var_columns],
+                   *[f'exists_{c}' for c in var_columns]]
 
-    create_trigger = (
-        f'CREATE TRIGGER IF NOT EXISTS {trigger_name} '
-        f'INSTEAD OF INSERT ON {view_name} BEGIN '
-        f'INSERT INTO {table} ({", ".join(columns)}) '
-        f"VALUES ({', '.join(subqueries)}); END;"
-    )
-    drop_trigger = f'DROP TRIGGER IF EXISTS {trigger_name}'
+        create_columns = [*[f'{c} BLOB' for c in const_columns],
+                          *[f'{c} INTEGER' for c in var_columns],
+                          *[f'_{c}_ INTEGER' for c in var_columns],
+                          *[f'exists_{c} INTEGER' for c in var_columns]]
+        select_columns = [
+            *[f'{temp_table}.{c} AS {c}' for c in const_columns],
+            *[f'coalesce({main_table}.{c}, {temp_table}.{c}) AS {c}' for c in var_columns],
+            *[f'{temp_table}.{c} AS _{c}_' for c in var_columns],
+            *[f'{main_table}.{c} AS exists_{c}' for c in var_columns],
+        ]
+        join_columns = [f'{main_table}.{c} == {temp_table}.{c}' for c in self.signature]
+        delete_where = [f'exists_{c} IS NOT NULL' for c in var_columns]
 
-    create_view = f'CREATE VIEW IF NOT EXISTS {view_name} AS SELECT * FROM {table};'
-    drop_view = f'DROP VIEW IF EXISTS {view_name};'
+        if auto_inc_column:
+            cols = [auto_inc_column, f'_{auto_inc_column}_', f'exists_{auto_inc_column}']
+            columns.extend(cols)
+            create_columns.extend([f'{c} INTEGER' for c in cols])
+            select_columns.extend([
+                f'coalesce({main_table}.{auto_inc_column}, {temp_table}.{auto_inc_column} + ?) '
+                f'AS {auto_inc_column}',
+                f'{temp_table}.{auto_inc_column} AS _{auto_inc_column}_',
+                f'{main_table}.{auto_inc_column} AS exists_{auto_inc_column}',
+            ])
+            delete_where.append(f'exists_{auto_inc_column} IS NOT NULL')
 
-    indices = [(v, f'DROP INDEX IF EXISTS {k}') for k, v in indices.items()]
+        alter = f'ALTER TABLE {secondary_table} RENAME TO {temp_table_name}'
+        create = f'CREATE TABLE {secondary_table} ({", ".join(create_columns)})'
+        insert = (f'INSERT INTO {secondary_table} ({", ".join(columns)}) '
+                  f'SELECT {", ".join(select_columns)} '
+                  f'FROM {temp_table} '
+                  f'LEFT JOIN {self.name} AS {main_table} '
+                  f'ON {" AND ".join(join_columns)}')
+        delete = (f'DELETE FROM {secondary_table} '
+                  f'WHERE {" OR ".join(delete_where)}')
 
-    def create(conn):
-        conn.execute(create_view)
-        conn.execute(create_trigger)
-        for create_index, _ in indices:
-            conn.execute(create_index)
+        def do_match(conn):
+            values = ()
+            if auto_inc_column:
+                max_id = conn.execute(f'SELECT max(rowid) FROM {self.name}')
+                max_id = max_id.fetchone()[0]
+                max_id = max_id or 0
+                values = (max_id,)
+            conn.execute(alter)
+            conn.execute(create)
+            conn.execute(insert, values)
 
-    def drop(conn):
-        for _, drop_index in indices:
-            conn.execute(drop_index)
-        conn.execute(drop_trigger)
-        conn.execute(drop_view)
+        def do_dedup(conn):
+            conn.execute(delete)
 
-    return {'cft': create, 'dft': drop, **insert_funcs(view_name, conf)}
+        self.match_primary_keys = do_match
+        self.dedup_primary_keys = do_dedup
+
+    def _build_match_fk(self):
+        if not self.foreign_keys:
+            self.match_foreign_keys = no_op
+            return
+
+        temp_table_name = f'original_{self.name}'
+        secondary_table = f'secondary.{self.name}'
+        temp_table = f'secondary.{temp_table_name}'
+
+        auto_inc_column = self.rowid
+        local_columns = []
+        create_columns = []
+        select_columns = []
+        joins = []
+
+        for local_column, remote_table, remote_column in self.foreign_keys:
+            local_columns.append(local_column)
+            create_columns.append(f'{local_column} INTEGER')
+
+            remote_table_name = f'lc_{local_column}_rm_{remote_table}_{remote_column}'
+
+            select_columns.append(f'{remote_table_name}.{remote_column} AS {local_column}')
+            joins.append(
+                f'LEFT JOIN secondary.{remote_table} AS {remote_table_name} '
+                f'ON {remote_table_name}._{remote_column}_ == {temp_table}.{local_column}',
+            )
+
+        static_columns = list(self.columns.keys() - set(local_columns) - {auto_inc_column})
+        columns = [*local_columns, *static_columns]
+        create_columns.extend([f'{c} BLOB' for c in static_columns])
+        select_columns.extend([f'{temp_table}.{c} AS {c}' for c in static_columns])
+
+        if auto_inc_column:
+            columns.append(auto_inc_column)
+            create_columns.append(f'{auto_inc_column} INTEGER')
+            select_columns.append(f'{temp_table}.{auto_inc_column} + ? AS {auto_inc_column}')
+
+        alter = f'ALTER TABLE {secondary_table} RENAME TO {temp_table_name}'
+        create = f'CREATE TABLE {secondary_table} ({", ".join(create_columns)})'
+        insert = (f'INSERT INTO {secondary_table} ({", ".join(columns)}) '
+                  f'SELECT {", ".join(select_columns)} '
+                  f'FROM {temp_table} '
+                  + ' '.join(joins))
+
+        def do_match(conn):
+            values = ()
+            if auto_inc_column:
+                max_id = conn.execute(f'SELECT max(rowid) FROM {self.name}')
+                max_id = max_id.fetchone()[0]
+                max_id = max_id or 0
+                values = (max_id,)
+            conn.execute(alter)
+            conn.execute(create)
+            conn.execute(insert, values)
+        self.match_foreign_keys = do_match
+
+    def _build_restore_original(self):
+        temp_table = f'original_{self.name}'
+
+        exists = ('SELECT name FROM sqlite_master '
+                  "WHERE type == 'table' AND name == ?")
+        drop = f'DROP TABLE {self.name}'
+        restore = f'ALTER TABLE {temp_table} RENAME TO {self.name}'
+
+        def do_restore(conn):
+            table_exists = list(conn.execute(exists, (temp_table,)))
+            if table_exists:
+                conn.execute(drop)
+                conn.execute(restore)
+        self.restore_original = do_restore
+
+    def __str__(self):
+        return f'<Table {self.name}>'
 
 
-def foreign_key_funcs(table, conf, config, *args, **kwargs):
-    if not conf[FOREIGN_KEYS]:
-        return {'ufk': {}}
+class DatabaseVersionError(TypeError):
+    def __init__(self, db, target, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.db = db
+        self.target = target
 
-    update_funcs = {}
-    columns = []
+    def __str__(self):
+        return f'Cannot write to database of version {self.db}; currently supported version: {self.target}'
 
-    for local_column, remote_table, remote_column in conf[FOREIGN_KEYS]:
-        columns.append(local_column)
-
-        local = f'{table}.{local_column}'
-        remote = f'{remote_table}.{remote_column}'
-
-        remote_identity = config[remote_table].get(UNIQUE, [])
-        if len(remote_identity) != 1 or len(remote_identity[0]) != 1:
-            raise ValueError
-        remote_identity = f'{remote_table}.{remote_identity[0][0]}'
-
-        subquery = (
-            f'SELECT {remote} FROM {remote_table} '
-            f'WHERE {remote_identity} == {local}'
-        )
-        update = (
-            f'UPDATE {table} '
-            f'SET {local_column} = ({subquery}) '
-            f'WHERE {table}.rowid == ?'
-        )
-
-        def do_update(conn, rowid, update=update):
-            conn.execute(update, (rowid,))
-
-        update_funcs[local_column] = do_update
-
-    return {'ufk': update_funcs}
+    def __reduce__(self):
+        return self.__class__, (self.db, self.target)
 
 
-FACTORIES = (insert_funcs, dedup_funcs, foreign_key_funcs, foreign_key_proxies)
+class DatabaseNotEmptyError(ValueError):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-
-def create_helpers(config):
-    for conf in config.values():
-        for opt in conf:
-            conf[opt] = TRANSFORM[opt](conf[opt])
-
-    funcs = {k: {} for k in config}
-    for table, conf in config.items():
-        for factory in FACTORIES:
-            funcs[table].update(factory(table, conf, config))
-
-    return funcs
+    def __str__(self):
+        return 'Database already has other data and cannot be used in this program.'

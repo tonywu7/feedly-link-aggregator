@@ -28,9 +28,8 @@ from functools import wraps
 from pathlib import Path
 
 from ..datastructures import labeled_sequence
-from ..sql import SCHEMA_VERSION
+from ..sql.db import db
 from ..sql.functions import register_all
-from ..sql.utils import is_locked, verify_version
 
 log = logging.getLogger('exporter.utils')
 
@@ -116,13 +115,13 @@ def with_db(exporter):
             raise FileNotFoundError(f'index.db not found in {wd}')
 
         conn = sqlite3.connect(db_path)
-        if is_locked(conn):
+        if db.is_locked(conn):
             log.error('Database was left in a partially consistent state.')
             log.error('Run `python -m feedly check-db` to fix it first.')
             return 1
 
         conn.row_factory = sqlite3.Row
-        verify_version(conn, SCHEMA_VERSION)
+        db.verify_version(conn)
         register_all(conn)
 
         try:
