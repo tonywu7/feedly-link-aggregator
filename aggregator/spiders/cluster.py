@@ -38,7 +38,7 @@ class FeedClusterSpider(FeedlyRSSSpider):
 
     custom_settings = compose_mappings(FeedlyRSSSpider.custom_settings, {
         'SPIDER_MIDDLEWARES': {
-            'feedly.spiders.cluster.ExplorationSpiderMiddleware': 900,
+            'aggregator.spiders.cluster.ExplorationSpiderMiddleware': 900,
         },
         'DEPTH_PRIORITY': 1,
         'SCHEDULER_DISK_QUEUE': 'scrapy.squeues.PickleFifoDiskQueue',

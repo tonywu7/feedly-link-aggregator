@@ -49,7 +49,7 @@ def check(db_path, debug=False):
         log.info(_('Database is OK.', color='green'))
     except DatabaseVersionError as exc:
         log.critical(exc)
-        log.error(_('Run `python -m feedly upgrade-db` to upgrade it to the current version.', color='cyan'))
+        log.error(_('Run `python -m aggregator upgrade-db` to upgrade it to the current version.', color='cyan'))
         return 1
     except Exception as exc:
         log.critical(exc, exc_info=True)
@@ -94,7 +94,7 @@ def migrate(db_path, debug=False, version=db.version):
 
     if db.is_locked(conn):
         log.error('Database was left in a partially consistent state.')
-        log.error('Run `python -m feedly check-db` to fix it first.')
+        log.error('Run `python -m aggregator check-db` to fix it first.')
         return 1
 
     outdated = False

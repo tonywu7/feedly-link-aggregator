@@ -202,11 +202,15 @@ class Table:
         keys = ', '.join(self.signature)
         func = self.info.get('dedup', 'min')
         comp = '<=' if func == 'max' else '>'
-        delete = (f'DELETE FROM {self.name} WHERE rowid {comp} ? AND rowid NOT IN '
+        delete = (f'DELETE FROM {self.name} WHERE %s rowid NOT IN '
                   f'(SELECT {func}(rowid) FROM {self.name} GROUP BY {keys})')
 
-        def do_dedup(conn, offset=0):
-            conn.execute(delete, (offset,))
+        def do_dedup(conn, offset=0, delete=delete):
+            if offset:
+                delete = delete % f'rowid {comp} {offset} AND'
+            else:
+                delete = delete % ''
+            conn.execute(delete)
         self.dedup = do_dedup
 
     def _build_update_foreign_key(self, others):
