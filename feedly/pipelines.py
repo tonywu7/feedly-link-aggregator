@@ -25,6 +25,7 @@ import logging
 import signal
 import time
 from collections import deque
+from contextlib import suppress
 from datetime import datetime
 from logging.handlers import QueueHandler
 from multiprocessing import get_context
@@ -34,9 +35,9 @@ from pathlib import Path
 import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
-from .sql.metadata import models, tables
+from .sql.db import db
+from .sql.factory import DatabaseVersionError
 from .sql.stream import DatabaseWriter
-from .sql.utils import DatabaseVersionError
 from .utils import LOG_LISTENER
 from .utils import colored as _
 from .utils import json_converters, watch_for_len, watch_for_timing
@@ -115,10 +116,12 @@ class SQLiteExportPipeline:
         self.init_stream(debug, buffering)
 
     def init_stream(self, debug, buffering):
-        self.stream = DatabaseWriter(self.db_path, tables, models, buffering, debug)
+        self.stream = DatabaseWriter(self.db_path, db, buffering=buffering, debug=debug)
 
     def close_stream(self):
+        self.stream.merge()
         self.stream.close()
+        self.stream.cleanup()
 
     def process_item(self, data, spider):
         if 'item' in data:
@@ -176,7 +179,7 @@ class SQLiteExportPipeline:
 class DatabaseStorageProcess(ctx.Process):
     def __init__(
         self, db_path, item_queue: ctx.Queue, log_queue: ctx.Queue, err_queue: ctx.Queue,
-        closing: ctx.Event, buffering, debug, *args, **kwargs,
+        ready: ctx.Event, closing: ctx.Event, buffering, debug, *args, **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.db_path = db_path
@@ -185,9 +188,10 @@ class DatabaseStorageProcess(ctx.Process):
         self.item_queue = item_queue
         self.log_queue = log_queue
         self.err_queue = err_queue
+        self.ready = ready
         self.closing = closing
         self.stream: DatabaseWriter
-        self._strikes = 0
+        self._abort = 0
 
     def config_logging(self):
         handler = QueueHandler(self.log_queue)
@@ -209,6 +213,8 @@ class DatabaseStorageProcess(ctx.Process):
                 stream.write(table, item)
 
     def deplete(self):
+        if self._abort > 2:
+            return
         stream = self.stream
         leftovers = []
         self.closing.set()
@@ -222,17 +228,24 @@ class DatabaseStorageProcess(ctx.Process):
             stream.write(table, item)
 
     def handle_sigint(self, *args, **kwargs):
-        self._strikes += 1
-        if self._strikes > 1:
+        self._abort += 1
+        if self._abort > 1:
             self.deplete()
+        elif self._abort > 2:
+            with suppress(Exception):
+                self.stream.interrupt()
         else:
             self.log.warn('Database writer process protected from SIGINT')
             self.log.warn('Send SIGINT again to force unclean shutdown.')
             self.log.warn(_('Sending SIGINT again may cause some records to be lost.', color='yellow'))
 
     def close(self):
+        if self._abort > 2:
+            return
         try:
+            self.stream.merge()
             self.stream.close()
+            self.stream.cleanup()
         except BaseException as e:
             self.err_queue.put_nowait(e)
 
@@ -244,7 +257,8 @@ class DatabaseStorageProcess(ctx.Process):
         self.log.info(_(f'Connected to database at {self.db_path}', color='magenta'))
 
         try:
-            self.stream = DatabaseWriter(self.db_path, tables, models, buffering=self.buffering, debug=self.debug)
+            self.stream = DatabaseWriter(self.db_path, db, buffering=self.buffering, debug=self.debug)
+            self.ready.set()
         except BaseException as e:
             self.closing.set()
             self.err_queue.put_nowait(e)
@@ -258,15 +272,15 @@ class DatabaseStorageProcess(ctx.Process):
             self.deplete()
         finally:
             self.log.info(_('Finalizing database', color='magenta'))
-            self.closing.set()
             self.close()
 
 
 class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
-    class _WriterProxy:
-        def __init__(self, queue, closing, log, maxsize):
+    class _WriterDelegate:
+        def __init__(self, queue, ready, closing, log, maxsize):
             self.queue = queue
+            self.ready = ready
             self.closing = closing
             self.buffer = deque()
             self.maxsize = maxsize
@@ -289,10 +303,13 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     self.log.warn('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
-                with watch_for_len('pending records', buffer, self.maxsize * .75):
+                with watch_for_len('pending records', buffer, self.maxsize / 2):
                     buffer.appendleft(item)
 
         def write(self, *item):
+            if not self.ready.is_set():
+                self.buffer.append(item)
+                return
             if (self.retry
                 and (len(self.buffer) > self.maxsize
                      or self.retry + self.retry_after < int(time.time()))):
@@ -325,9 +342,11 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             DatabaseVersionError: self.handle_version_error,
         }
 
-        return super().open_spider(spider)
+        super().open_spider(spider)
+        self.check_error(spider)
 
     def init_stream(self, debug, buffering):
+        ready = ctx.Event()
         closing = ctx.Event()
         throw = ctx.Event()
         item_queue = ctx.Queue()
@@ -336,22 +355,29 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
         self.process = DatabaseStorageProcess(
             self.db_path, item_queue, log_queue, err_queue,
-            closing, buffering, debug, name='StorageProcess',
+            ready, closing, buffering, debug, name='StorageProcess',
         )
         self.process.start()
-        self.stream = self._WriterProxy(item_queue, closing, self.log, buffering * 2)
+        self.stream = self._WriterDelegate(item_queue, ready, closing, self.log, buffering * 5)
         self.closing = closing
         self.throw = throw
         self.err_queue = err_queue
-        self.check_error()
 
-    def check_error(self):
+    def check_error(self, spider):
+        should_close = None
         if not self.err_queue.empty():
             error = self.err_queue.get_nowait()
             handler = self.exception_handlers.get(type(error))
             if handler:
-                return handler(error)
-            raise error
+                should_close = handler(error)
+            else:
+                should_close = error
+        if should_close:
+            spider.crawler.engine.close_spider(spider, should_close)
+            self.close_stream()
+            self.closed = True
+            if isinstance(should_close, Exception):
+                raise should_close
 
     def handle_version_error(self, exc):
         self.log.critical(exc)
@@ -362,14 +388,12 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
     def process_item(self, data, spider):
         if self.closed:
             return data
-
-        should_close = self.check_error()
-        if should_close:
-            spider.crawler.engine.close_spider(spider, should_close)
-            self.close_stream()
-            self.closed = True
-
+        self.check_error(spider)
         return super().process_item(data, spider)
+
+    def close_spider(self, spider):
+        self.close_stream()
+        self.check_error(spider)
 
     def close_stream(self):
         self.stream.close()

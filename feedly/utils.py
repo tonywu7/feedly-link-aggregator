@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import string
 import time
 from contextlib import contextmanager
@@ -58,7 +59,7 @@ class RobustQueueListener(QueueListener):
         try:
             super()._monitor()
         except EOFError:
-            log.warn('Log listener has stopped.')
+            log.warn('Log listener has prematurely stopped.')
 
 
 class QueueListenerWrapper:
@@ -97,6 +98,14 @@ class QueueListenerWrapper:
 
 
 LOG_LISTENER = QueueListenerWrapper()
+
+
+def append_stem(path, appendage):
+    return path.with_name(f'{path.stem}{appendage}').with_suffix(path.suffix)
+
+
+def randstr(length, choices='0123456789abcdef'):
+    return ''.join(random.choices(choices, k=length))
 
 
 def parse_html(domstring, url='about:blank') -> TextResponse:

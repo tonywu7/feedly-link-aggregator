@@ -24,7 +24,6 @@ import logging
 import re
 from functools import wraps
 from importlib import import_module
-from pathlib import Path
 from textwrap import dedent, indent
 
 import click
@@ -32,7 +31,7 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
-from .sql.cli import check, migrate
+from .sql.cli import check, leftovers, merge, migrate
 
 
 def stylize(pattern, **styles):
@@ -162,31 +161,57 @@ def export(topic, exporter_args, **kwargs):
 @click.option('-p', 'preset')
 def run_spider(spider, preset, **kwargs):
     settings = get_project_settings()
-    process = CrawlerProcess(settings)
+    process = CrawlerProcess(settings, install_root_handler=False)
     process.crawl(spider, preset=preset)
     process.start(stop_after_crawl=True)
 
 
 @cli.command()
-@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
-              help='Path to the directory containing scraped data.')
+@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True, dir_okay=False),
+              help='Path to the database.')
+@click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
+              help='Optional file to write executed SQL statements to.')
 @click.pass_context
-def check_db(ctx, wd, **kwargs):
+def check_db(ctx, db_path, debug=False, **kwargs):
     """Check a database for potential problems and inconsistencies."""
 
-    db_path = Path(wd) / 'index.db'
-    quit(check(db_path, debug=ctx.obj['DEBUG']))
+    ctx.exit(check(db_path, debug=debug))
+
+
+@cli.command()
+@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True, dir_okay=False),
+              help='Path to the database.')
+@click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
+              help='Optional file to write executed SQL statements to.')
+@click.pass_context
+def upgrade_db(ctx, db_path, debug=False, **kwargs):
+    """Upgrade an older database to the latest schema version."""
+
+    ctx.exit(migrate(db_path, debug=debug))
+
+
+@cli.command()
+@click.option('-i', '--input', 'db_paths', multiple=True, required=True, type=click.Path(exists=True, dir_okay=False),
+              help='Path to the database to be merged. Can be specified multiple times.')
+@click.option('-o', '--output', 'output', required=True, type=click.Path(exists=False, dir_okay=False),
+              help='Optional file to write executed SQL statements to.')
+@click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
+              help='Optional file to write executed SQL statements to.')
+@click.pass_context
+def merge_db(ctx, *, db_paths, output, debug=False, **kwargs):
+    """Merge multiple databases into a new database."""
+
+    ctx.exit(merge(output, *db_paths, debug=debug))
 
 
 @cli.command()
 @click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False),
               help='Path to the directory containing scraped data.')
+@click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
+              help='Optional file to write executed SQL statements to.')
 @click.pass_context
-def upgrade_db(ctx, wd, **kwargs):
-    """Upgrade an older database to the latest schema version."""
-
-    db_path = Path(wd) / 'index.db'
-    quit(migrate(db_path, debug=ctx.obj['DEBUG']))
+def consume_leftovers(ctx, wd, debug=False, **kwargs):
+    ctx.exit(leftovers(wd, debug=debug))
 
 
 def numpydoc2click(doc: str):

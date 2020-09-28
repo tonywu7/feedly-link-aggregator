@@ -38,6 +38,7 @@ from scrapy.signals import request_dropped, request_scheduled, spider_closed
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
+from twisted.python.failure import Failure
 
 from .feedly import build_api_url, get_feed_uri
 from .requests import FinishedRequest, ProbeRequest
@@ -157,6 +158,8 @@ class FeedProbingDownloaderMiddleware:
         results = await DeferredList(requests, consumeErrors=True)
 
         for successful, response in results:
+            if isinstance(response, Failure):
+                response = response.value.response
             if not successful:
                 dead = True
             elif response.status not in {200, 206, 405}:
@@ -271,6 +274,8 @@ class RequestPersistenceDownloaderMiddleware:
             return FinishedRequest(meta=request.meta)
 
     def _continue(self, meta, request, spider):
+        if self.archive_path.exists():
+            self.logger.info('Restoring persisted requests...')
         requests = {**self.load_archive()}
         feed = spider.config['FEED']
         resume_feed = self.load_info().get('crawling', '')

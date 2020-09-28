@@ -1,4 +1,4 @@
-BEGIN;
+BEGIN EXCLUSIVE;
 
 ALTER TABLE
     markup RENAME TO tmp;
@@ -52,4 +52,4 @@ UPDATE
 SET
     version = '0.10.3';
 
-END;
+COMMIT;

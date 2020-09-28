@@ -71,8 +71,8 @@ CREATE TABLE tagging (
     url_id INTEGER NOT NULL,
     keyword_id INTEGER NOT NULL,
     CONSTRAINT pk_tagging PRIMARY KEY (id),
-    CONSTRAINT fk_tagging_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT fk_tagging_keyword_id_keyword FOREIGN KEY(keyword_id) REFERENCES keyword (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_tagging_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_tagging_keyword_id_keyword FOREIGN KEY(keyword_id) REFERENCES keyword (id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 INSERT INTO
@@ -109,8 +109,8 @@ CREATE TABLE item (
     updated DATETIME,
     crawled FLOAT,
     CONSTRAINT pk_item PRIMARY KEY (id),
-    CONSTRAINT fk_item_url_url FOREIGN KEY(url) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT fk_item_source_url FOREIGN KEY(source) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_item_url_url FOREIGN KEY(url) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_item_source_url FOREIGN KEY(source) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 INSERT INTO
@@ -147,8 +147,8 @@ CREATE TABLE hyperlink (
     target_id INTEGER NOT NULL,
     element VARCHAR NOT NULL,
     CONSTRAINT pk_hyperlink PRIMARY KEY (id),
-    CONSTRAINT fk_hyperlink_source_id_url FOREIGN KEY(source_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT fk_hyperlink_target_id_url FOREIGN KEY(target_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_hyperlink_source_id_url FOREIGN KEY(source_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_hyperlink_target_id_url FOREIGN KEY(target_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 INSERT INTO
@@ -169,7 +169,7 @@ CREATE TABLE feed (
     title TEXT NOT NULL,
     dead BOOLEAN,
     CONSTRAINT pk_feed PRIMARY KEY (id),
-    CONSTRAINT fk_feed_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT fk_feed_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT ck_feed_dead CHECK (dead IN (0, 1))
 );
 
@@ -190,7 +190,7 @@ CREATE TABLE summary (
     url_id INTEGER NOT NULL,
     markup TEXT NOT NULL,
     CONSTRAINT pk_summary PRIMARY KEY (id),
-    CONSTRAINT fk_summary_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_summary_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 INSERT INTO
@@ -210,7 +210,7 @@ CREATE TABLE webpage (
     url_id INTEGER NOT NULL,
     markup TEXT NOT NULL,
     CONSTRAINT pk_webpage PRIMARY KEY (id),
-    CONSTRAINT fk_webpage_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE RESTRICT
+    CONSTRAINT fk_webpage_url_id_url FOREIGN KEY(url_id) REFERENCES url (id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 INSERT INTO
@@ -241,6 +241,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_webpage_url_id ON webpage (url_id);
 UPDATE
     __version__
 SET
-    version = '0.10.5';
+    version = '0.10.6';
 
 COMMIT;
