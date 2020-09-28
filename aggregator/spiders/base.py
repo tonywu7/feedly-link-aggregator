@@ -39,9 +39,8 @@ from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
 from twisted.python.failure import Failure
 
-from .. import feedly
 from ..config import Config
-from ..feedly import FeedlyEntry
+from ..feedly import FeedlyEntry, build_api_url, get_feed_uri
 from ..requests import (FinishedRequest, ProbeRequest, ResumeRequest,
                         reconstruct_request)
 from ..urlkit import build_urls, select_templates
@@ -55,9 +54,9 @@ class FeedlyRSSSpider(Spider, ABC):
         'ROBOTSTXT_OBEY': False,
         'SPIDER_MIDDLEWARES': {
             'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
-            'feedly.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            'feedly.spiders.base.FetchSourceSpiderMiddleware': 500,
-            'feedly.spiders.base.CrawledItemSpiderMiddleware': 700,
+            'aggregator.middlewares.ConditionalDepthSpiderMiddleware': 100,
+            'aggregator.spiders.base.FetchSourceSpiderMiddleware': 500,
+            'aggregator.spiders.base.CrawledItemSpiderMiddleware': 700,
         },
     }
 
@@ -139,7 +138,7 @@ class FeedlyRSSSpider(Spider, ABC):
 
     def get_streams_url(self, feed_id: str, **params) -> str:
         params = {**self.api_base_params, **params}
-        return feedly.build_api_url('streams', streamId=feed_id, **params)
+        return build_api_url('streams', streamId=feed_id, **params)
 
     def probe_feed(self, query: str, derive: bool = True, source: Optional[Request] = None, **kwargs):
         templates = self.config['FEED_TEMPLATES']
@@ -203,7 +202,7 @@ class FeedlyRSSSpider(Spider, ABC):
             meta['no_filter'] = True
             meta.pop('inc_depth', None)
 
-        feed_url = feedly.get_feed_uri(feed)
+        feed_url = get_feed_uri(feed)
         meta['feed_url'] = feed_url
 
         meta['pkey'] = (feed_url, 'main')

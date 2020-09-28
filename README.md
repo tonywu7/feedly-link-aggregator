@@ -47,7 +47,7 @@ For example,
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
 
 ```bash
-> python -m feedly export urls -i '<dir>'
+> python -m aggregator export urls -i '<dir>'
 ```
 
 where `<dir>` is the same directory.
@@ -94,7 +94,7 @@ precedence over the ones defined in a preset.
 ### Exporting
 
 ```bash
-> python -m feedly export <topic> -i '<dir>'
+> python -m aggregator export <topic> -i '<dir>'
 ```
 
 Currently `<topic>` can be
@@ -105,7 +105,7 @@ Currently `<topic>` can be
 **![#56b6c2](https://placehold.it/12/56b6c2/000000?text=+) Example: Tumblr GIFs**
 
 ```bash
-python -m feedly export urls -i data \
+python -m aggregator export urls -i data \
   --include tag is img \
   --include source:netloc under tumblr.com \
   --include target:netloc under media.tumblr.com \
@@ -138,7 +138,7 @@ resulting in a folder structure that looks like
 ----
 
 For the `urls` exporter, the following features are available. Use the `-h`/`--help` option for a complete documentation:
-`python -m feedly export urls --help`.
+`python -m aggregator export urls --help`.
 
 #### Output template
 
@@ -155,7 +155,7 @@ files and even folders to your liking.
 For example, with scraped data from the feed [`https://xkcd.com/atom.xml`](https://xkcd.com/atom.xml), an export command
 
 ```bash
-> python -m feedly export urls -i data -o "%(feed:title)s/%(tag)s/%(target:netloc)s.csv"
+> python -m aggregator export urls -i data -o "%(feed:title)s/%(tag)s/%(target:netloc)s.csv"
 ```
 
 could generate the following directory structure:
@@ -171,7 +171,7 @@ could generate the following directory structure:
                 www.barnesandnoble.com.csv
                 ...
 
-For a list of available placeholders, see the command help: `python -m feedly export urls --help`.
+For a list of available placeholders, see the command help: `python -m aggregator export urls --help`.
 
 #### Filtering
 
@@ -189,7 +189,7 @@ Use the `--include`/`--exclude` (shorthands `+f`/`-f`) to specify filters:
 Filter options can be specified multiple times to enable multiple filters, Only URLs that pass _all_ filters are exported.
 
 You can filter on URL components, feed and post titles, and dates published. For a list of filterable attributes (they are the
-same as the naming template placeholders), see the command help: `python -m feedly export urls --help`.
+same as the naming template placeholders), see the command help: `python -m aggregator export urls --help`.
 
 ### Cluster spider
 

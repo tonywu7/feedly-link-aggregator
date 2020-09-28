@@ -11,8 +11,8 @@ __version__ = '0.10.5'
 
 BOT_NAME = 'feedly'
 
-SPIDER_MODULES = ['feedly.spiders']
-NEWSPIDER_MODULE = 'feedly.spiders'
+SPIDER_MODULES = ['aggregator.spiders']
+NEWSPIDER_MODULE = 'aggregator.spiders'
 
 LOG_ENABLED = True
 LOG_LEVEL = 20
@@ -52,7 +52,7 @@ DEFAULT_REQUEST_HEADERS = {
 # Enable or disable spider middlewares
 # See https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 # SPIDER_MIDDLEWARES = {
-#    'feedly.middlewares.FeedlySpiderMiddleware': 543,
+#    'aggregator.middlewares.FeedlySpiderMiddleware': 543,
 # }
 
 HTTPERROR_ALLOWED_CODES = [403, 404]
@@ -60,27 +60,27 @@ HTTPERROR_ALLOWED_CODES = [403, 404]
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
-    'feedly.middlewares.RequestFilterDownloaderMiddleware': 100,
-    'feedly.middlewares.RequestPersistenceDownloaderMiddleware': 150,
-    'feedly.middlewares.FeedProbingDownloaderMiddleware': 200,
-    'feedly.middlewares.HTTPErrorDownloaderMiddleware': 500,
-    'feedly.middlewares.AuthorizationDownloaderMiddleware': 600,
+    'aggregator.middlewares.RequestFilterDownloaderMiddleware': 100,
+    'aggregator.middlewares.RequestPersistenceDownloaderMiddleware': 150,
+    'aggregator.middlewares.FeedProbingDownloaderMiddleware': 200,
+    'aggregator.middlewares.HTTPErrorDownloaderMiddleware': 500,
+    'aggregator.middlewares.AuthorizationDownloaderMiddleware': 600,
 }
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
-    'feedly.extensions.LogStatsExtended': 500,
-    # 'feedly.extensions.CProfile': 1000,
+    'aggregator.extensions.LogStatsExtended': 500,
+    # 'aggregator.extensions.CProfile': 1000,
 }
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-    # 'feedly.pipelines.CompressedStreamExportPipeline': 900,
-    # 'feedly.pipelines.SQLiteExportPipeline': 900,
-    'feedly.pipelines.SQLiteExportProcessPipeline': 900,
+    # 'aggregator.pipelines.CompressedStreamExportPipeline': 900,
+    # 'aggregator.pipelines.SQLiteExportPipeline': 900,
+    'aggregator.pipelines.SQLiteExportProcessPipeline': 900,
 }
 
 LOGSTATS_INTERVAL = 60.0
