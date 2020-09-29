@@ -20,39 +20,36 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import atexit
 import gzip
 import logging
+import os
 import pickle
+import shutil
 import time
 from collections import deque
+from concurrent.futures.thread import ThreadPoolExecutor
 from contextlib import suppress
+from itertools import permutations
+from pathlib import Path
 from threading import Event, Thread
-from typing import Callable, List
 from urllib.parse import urlsplit
 
 import simplejson as json
-from scrapy import Spider
-from scrapy.exceptions import IgnoreRequest
+from scrapy.exceptions import DontCloseSpider, IgnoreRequest, NotConfigured
 from scrapy.http import Request, Response
-from scrapy.signals import request_dropped, request_scheduled, spider_closed
+from scrapy.signals import (request_dropped, request_scheduled, spider_closed,
+                            spider_idle)
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
 from twisted.python.failure import Failure
 
+from .docs import OptionsContributor
 from .feedly import build_api_url, get_feed_uri
-from .requests import FinishedRequest, ProbeRequest
-from .utils import LOG_LISTENER
+from .requests import ProbeFeed, RequestFinished, reconstruct_request
 from .utils import colored as _
-from .utils import guard_json, is_rss_xml, wait
-
-
-def filter_domains(request: Request, spider: Spider):
-    domains = spider.config['FOLLOW_DOMAINS']
-    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
-    if not feed_url or domains is None:
-        return True
-    return url_is_from_any_domain(feed_url, domains)
+from .utils import guard_json, is_rss_xml, sha1sum, wait
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
@@ -80,24 +77,22 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
 
 
 class FeedProbingDownloaderMiddleware:
-    def __init__(self):
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler.settings)
+
+    def __init__(self, settings):
         self.logger = logging.getLogger('worker.prober')
-        self.initialized = False
+        self.test_status = settings.get('FEED_STATE_SELECT', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
 
-    def init(self, spider):
-        self.test_status = spider.config.get('FEED_STATE_SELECT', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
-        self.initialized = True
-
-    async def process_request(self, request: ProbeRequest, spider):
-        if not self.initialized:
-            self.init(spider)
-        if not isinstance(request, ProbeRequest):
+    async def process_request(self, request: ProbeFeed, spider):
+        if not isinstance(request, ProbeFeed):
             return
 
         download = spider.crawler.engine.download
         meta = request.meta
         feeds = meta['try_feeds']
-        query = meta['search_query']
+        query = meta['feed_url']
         valid_feeds = []
 
         self.logger.info(_(f'Probing {query}', color='grey'))
@@ -174,24 +169,30 @@ class FeedProbingDownloaderMiddleware:
 class RequestPersistenceDownloaderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
-        instance = cls()
+        instance = cls(crawler.settings)
+        instance.crawler = crawler
         crawler.signals.connect(instance.eager_process, request_scheduled)
         crawler.signals.connect(instance._remove_request, request_dropped)
         crawler.signals.connect(instance._close, spider_closed)
         return instance
 
-    def __init__(self):
-        self.feed = None
-        self.instructions = deque()
+    def __init__(self, settings):
         self.logger = logging.getLogger('worker.request')
         self.closing = Event()
         self.thread = Thread(None, target=self.worker, name='RequestPersistenceThread',
-                             args=(self.closing,), daemon=False)
+                             args=(self.closing,), daemon=True)
         self.future = None
-        self.initialized = False
+
+        self._jobdir = settings['JOBDIR']
+        output = settings['OUTPUT']
+        self.archive_path = output / 'scheduled' / 'freezer'
+        self.freezer = RequestFreezer(self.archive_path)
+        self.thread.start()
+        atexit.register(self._close)
+        atexit.register(self._rmjobdir)
 
     def worker(self, closing: Event):
-        while closing.wait(20):
+        while not closing.wait(20):
             try:
                 self.archive()
             except Exception as e:
@@ -199,56 +200,13 @@ class RequestPersistenceDownloaderMiddleware:
         self.archive()
 
     def archive(self):
-        archive = self.load_archive()
-        for action, key, data in self.instructions:
-            if action == 'add':
-                archive[key] = data
-            if action == 'remove':
-                archive.pop(key, None)
-        self.instructions.clear()
-        self.dump_archive(archive)
-        self.dump_info({'crawling': self.feed})
-        return archive
-
-    def load_archive(self):
-        requests = {}
-        with suppress(EOFError, FileNotFoundError):
-            with gzip.open(self.archive_path, 'rb') as f:
-                requests = pickle.load(f)
-        return requests
-
-    def dump_archive(self, archive):
-        with gzip.open(self.archive_path, 'wb') as f:
-            pickle.dump(archive, f)
-
-    def load_info(self):
-        info = {}
-        with suppress(EOFError, FileNotFoundError, json.JSONDecodeError):
-            with open(self.info_path) as f:
-                info = json.load(f)
-        return info
-
-    def dump_info(self, info):
-        s = json.dumps(info)
-        with open(self.info_path, 'wb+', buffering=0) as f:
-            f.write(s.encode())
-
-    def init(self, spider):
-        self.feed = spider.config['FEED']
-        output = spider.config['OUTPUT']
-        self.info_path = output / 'info.json'
-        self.archive_path = output / 'requests.pickle.gz'
-        self.thread.start()
-        self.initialized = True
+        self.freezer.flush()
 
     def eager_process(self, request, spider):
         with suppress(IgnoreRequest):
             self.process_request(request, spider, True)
 
     def process_request(self, request: Request, spider, idempotent=False):
-        if not self.initialized:
-            self.init(spider)
-
         meta = request.meta
         action = meta.get('_persist', None)
         if not action:
@@ -259,57 +217,57 @@ class RequestPersistenceDownloaderMiddleware:
         if action == 'release' and not idempotent:
             return self._continue(meta, request, spider)
         if action == 'add':
-            self._add_request(request)
+            self.freezer.add(request)
             if not idempotent:
                 del meta['_persist']
             return
         if action == 'remove':
-            self._remove_request(request)
+            self.freezer.remove(request)
             raise IgnoreRequest()
 
     def process_exception(self, request: Request, exception, spider):
-        if isinstance(request, FinishedRequest):
+        if isinstance(request, RequestFinished):
             return
         if isinstance(exception, IgnoreRequest):
-            return FinishedRequest(meta=request.meta)
+            return RequestFinished(meta=request.meta)
+
+    def _remove_request(self, request: Request, spider=None):
+        self.freezer.remove(request)
 
     def _continue(self, meta, request, spider):
         if self.archive_path.exists():
             self.logger.info('Restoring persisted requests...')
-        requests = {**self.load_archive()}
-        feed = spider.config['FEED']
-        resume_feed = self.load_info().get('crawling', '')
-
-        if requests and feed != resume_feed:
-            self.logger.info(_(f'Found unfinished crawl with {len(requests)} pending request(s)', color='cyan'))
-            self.logger.info(_(f"Continue crawling '{resume_feed}'?", color='cyan'))
-            self.logger.info(_(f"Start new crawl with '{feed}'?", color='cyan'))
-            self.logger.info(_('Or exit?', color='cyan'))
-            action = 'x'
-        elif requests:
-            action = 'c'
-        else:
-            action = 's'
-
-        self.feed = resume_feed
-        LOG_LISTENER.stop()
-        while action not in 'cse':
-            action = input('(continue/start/exit) [c]: ')[:1]
-        LOG_LISTENER.start()
-
-        if action == 'e':
-            raise IgnoreRequest()
-        elif action == 's':
-            for k in requests:
-                self.instructions.append(('remove', k, None))
-            requests = {}
-            self.feed = feed
-
-        meta['_requests'] = requests
         del meta['_persist']
+
+        meta['freezer'] = self.freezer
         return Response(url=request.url, request=request)
 
-    def _add_request(self, request: Request):
+    def _close(self, spider=None, reason=None):
+        if self.closing.is_set():
+            return
+        self.closing.set()
+        self.thread.join(2)
+        self.archive()
+        num_requests = len(self.freezer)
+        if num_requests:
+            self.logger.info(_(f'# of requests persisted to filesystem: {num_requests}', color='cyan'))
+
+    def _rmjobdir(self):
+        with suppress(Exception):
+            shutil.rmtree(Path(self._jobdir) / 'requests.queue')
+
+
+class RequestFreezer:
+    def __init__(self, path):
+        self.wd = Path(path)
+        self.path = self.wd / 'frozen'
+        os.makedirs(self.path, exist_ok=True)
+        self.buffer = deque()
+
+    def add(self, request):
+        key = request.meta.get('pkey')
+        if not key:
+            return
         for_pickle = {
             'url': request.url,
             'method': request.method,
@@ -317,56 +275,268 @@ class RequestPersistenceDownloaderMiddleware:
             'meta': {**request.meta, '_time_pickled': time.perf_counter()},
             'priority': request.priority,
         }
-        self.instructions.append(('add', request.meta['pkey'],
-                                  (request.__class__, for_pickle)))
+        self.buffer.append(('add', key, (request.__class__, for_pickle)))
 
-    def _remove_request(self, request: Request, spider=None):
-        if 'pkey' not in request.meta:
+    def remove(self, request):
+        key = request.meta.get('pkey')
+        if not key:
             return
-        self.instructions.append(('remove', request.meta['pkey'], None))
+        self.buffer.append(('remove', key, None))
 
-    def _close(self, spider=None, reason=None):
-        if self.closing.is_set():
-            return
-        self.closing.set()
-        self.thread.join(2)
-        archive = self.archive()
-        if len(archive):
-            self.logger.info(_(f'# of requests persisted to filesystem: {len(archive)}', color='cyan'))
+    def flush(self):
+        shelves = {}
+        buffer = self.buffer
+        self.buffer = deque()
+        for action, key, item in buffer:
+            hash_ = sha1sum(pickle.dumps(key))
+            label = hash_[:2]
+            shelf = shelves.get(label)
+            if not shelf:
+                shelf = shelves[label] = self.open_shelf(label)
+            if action == 'add':
+                shelf[hash_] = item
+            if action == 'remove':
+                shelf.pop(hash_, None)
+        self.persist(shelves)
+        del shelves
+        del buffer
+
+    def open_shelf(self, shelf, path=None):
+        path = path or self.path / shelf
+        try:
+            with gzip.open(path) as f:
+                return pickle.load(f)
+        except Exception:
+            return {}
+
+    def persist(self, shelves, path=None):
+        path = path or self.path
+        for shelf, items in shelves.items():
+            shelf = path / shelf
+            with gzip.open(shelf, 'wb') as f:
+                pickle.dump(items, f)
+
+    def copy(self, src, dst):
+        def cp(shelf):
+            srcd = self.open_shelf(shelf, src / shelf)
+            if not srcd:
+                return
+            dstd = self.open_shelf(shelf, dst / shelf)
+            dstd.update(srcd)
+            self.persist({shelf: dstd}, dst)
+
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            executor.map(cp, [i + j for i, j in self.names()])
+
+    def defrost(self, spider):
+        info = self.load_info()
+        defroster_path = self.wd / 'defrosting'
+        if defroster_path.exists():
+            self.copy(self.path, defroster_path)
+            shutil.rmtree(self.path)
+        else:
+            shutil.move(self.path, defroster_path)
+        os.makedirs(self.path)
+        self.dump_info(info)
+
+        defroster = RequestDefroster(defroster_path)
+        for cls, kwargs in defroster:
+            yield reconstruct_request(cls, spider, **kwargs)
+        shutil.rmtree(defroster_path)
+
+    def clear(self):
+        shutil.rmtree(self.path)
+        self.path.mkdir()
+
+    def load_info(self):
+        info = {}
+        with suppress(EOFError, FileNotFoundError,
+                      json.JSONDecodeError, gzip.BadGzipFile):
+            with open(self.path / 'info.json') as f:
+                return json.load(f)
+        return info
+
+    def dump_info(self, info):
+        with open(self.path / 'info.json', 'w+') as f:
+            json.dump(info, f)
+
+    def names(self):
+        return permutations('0123456789abcdef', 2)
+
+    def __len__(self):
+        length = 0
+        for i, j in self.names():
+            shelf = i + j
+            length += len(self.open_shelf(shelf))
+        return length
+
+    def iter_keys(self):
+        for i, j in self.names():
+            shelf = i + j
+            shelf = self.open_shelf(shelf)
+            yield from shelf
 
 
-class RequestFilterDownloaderMiddleware:
-    DEFAULT_FILTERS = {
-        filter_domains: 300,
-    }
+class RequestDefroster(RequestFreezer):
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def __iter__(self):
+        for i, j in self.names():
+            name = i + j
+            shelf = self.open_shelf(name)
+            yield from shelf.values()
+            with suppress(FileNotFoundError):
+                os.unlink(self.path / name)
+
+
+class RequestDefrosterSpiderMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        instance = cls()
+        instance.crawler = crawler
+        crawler.signals.connect(instance.leftover_requests, spider_idle)
+        return instance
 
     def __init__(self):
-        self.tests: List[Callable[[Request, Spider], bool]] = []
-        self._initialized = False
+        self.resume_iter = None
 
-    def init(self, spider: Spider):
-        tests = {**self.DEFAULT_FILTERS, **spider.config.get('REQUEST_FILTERS', {})}
-        self.tests = [t[0] for t in sorted(tests.items(), key=lambda t: t[1])]
-        self._initialized = True
+    def process_spider_output(self, response, result, spider):
+        if spider.resume_iter:
+            self.resume_iter = spider.resume_iter
+            spider.resume_iter = None
+        if self.resume_iter:
+            self.defrost_in_batch(spider)
+        return result
 
-    def process_request(self, request: Request, spider):
-        if not self._initialized:
-            self.init(spider)
-        if request.meta.get('no_filter'):
-            return
-        for t in self.tests:
-            result = t(request, spider)
-            if not result:
-                ignore = request.meta.get('if_ignore')
-                if ignore:
-                    ignore()
-                raise IgnoreRequest()
-            if isinstance(result, Request):
-                result.meta['no_filter'] = True
-                return result
-        proceed = request.meta.get('if_proceed')
-        if proceed:
-            proceed()
+    def defrost_in_batch(self, spider, batch=100, maxsize=1000):
+        i = 0
+        while not batch or i < batch:
+            try:
+                self.crawler.engine.crawl(next(self.resume_iter), spider)
+                i += 1
+            except StopIteration:
+                self.resume_iter = None
+                break
+
+    def leftover_requests(self, spider):
+        if self.resume_iter:
+            self.defrost_in_batch(spider)
+            raise DontCloseSpider()
+
+
+class OffsiteFeedSpiderMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler.settings)
+
+    def __init__(self, settings):
+        self.domains = settings.get('FOLLOW_DOMAINS')
+        if not self.domains:
+            raise NotConfigured()
+
+    def process_spider_output(self, response, result, spider):
+        for r in result:
+            if not isinstance(r, Request):
+                yield r
+                continue
+            feed_url = r.meta.get('feed_url')
+            if not feed_url or url_is_from_any_domain(feed_url, self.domains):
+                yield r
+
+
+class DerefItemSpiderMiddleware:
+    def process_spider_output(self, response, result, spider):
+        for r in result:
+            if not isinstance(r, Request):
+                yield r
+                continue
+            r.meta.pop('source_item', None)
+            yield r
+
+
+class FetchSourceSpiderMiddleware(OptionsContributor):
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler.settings)
+
+    def __init__(self, settings):
+        self.logger = logging.getLogger('worker.fetchsource')
+        self.scrape_source = settings.getbool('SCRAPE_SOURCE_PAGE', False)
+        if not self.scrape_source:
+            raise NotConfigured()
+
+    def process_spider_output(self, response, result, spider):
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data or 'source_fetched' in data:
+                yield data
+                continue
+            item = data['item']
+            yield Request(
+                item.url, callback=self.parse_source,
+                errback=self.handle_source_failure,
+                meta={'data': data},
+            )
+
+    def parse_source(self, response):
+        meta = response.meta
+        data = meta['data']
+        data['source_fetched'] = True
+        item = data['item']
+        with suppress(AttributeError):
+            if response.status >= 400:
+                self.logger.debug(f'Dropping {response}')
+                raise AttributeError
+            body = response.text
+            item.add_markup('webpage', body)
+        yield data
+
+    def handle_source_failure(self, failure: Failure):
+        self.logger.debug(failure)
+        request = failure.request
+        data = request.meta['data']
+        data['source_fetched'] = True
+        yield data
+
+    @staticmethod
+    def _help_options():
+        return {
+            'SCRAPE_SOURCE_PAGE': """
+            Whether or not to download and process the source webpage of a feed item.
+            Default is `False`.
+
+            If disabled, spider will only process HTML snippets returned by Feedly, which contain
+            mostly article summaries and sometimes images/videos, and will therefore only
+            extract URLs from them.
+
+            If enabled, then in addition to that, spider will also
+            download a copy of the webpage from the source website of the feed which could
+            contain many more hyperlinks, although the original webpage may not exist anymore.
+            """,
+        }
+
+
+class CrawledItemSpiderMiddleware:
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(crawler.settings)
+
+    def __init__(self, settings):
+        path = settings['OUTPUT'] / 'crawled_items.txt'
+        if path.exists():
+            with open(path, 'r') as f:
+                self.crawled_items |= set(f.read().split('\n'))
+        else:
+            raise NotConfigured()
+
+    def process_spider_output(self, response, result, spider):
+        for data in result:
+            if isinstance(data, Request) or 'item' not in data:
+                yield data
+                continue
+            item = data['item']
+            if item.url not in self.crawled_items:
+                yield data
 
 
 class AuthorizationDownloaderMiddleware:

@@ -166,47 +166,47 @@ Export feed data as graph data.
 
 Synopsis
 --------
-export _graph_ -i <input> -o [name] [**graphtype=**_hyperlink|domain_]
+export ~graph~ -i <input> -o [name] [**graphtype=**~hyperlink|domain~]
 
 Description
 -----------
 This exporter lets you represent scraped URL data using graph data structure.
 
-**Requires igraph. You must install _requirements-optional.txt_.**
+**Requires igraph. You must install ~requirements-optional.txt~.**
 
-Currently this exports graphs in _GraphML_ format only.
+Currently this exports graphs in ~GraphML~ format only.
 
 This exporter does not support filtering or name templates.
 
 Options
 -------
-_graphtype=[hyperlink|domain]_
+~graphtype=[hyperlink|domain]~
 
-    **_hyperlink_**
+    **~hyperlink~**
         **Directed, self-loop allowed**
         **Vertices**
-            Each _source_ or _target_ URL (representing a file on a website);
+            Each ~source~ or ~target~ URL (representing a file on a website);
             **Attributes**
-                _name_: The URL
+                ~name~: The URL
         **Edges**
-            Each hyperlink found in _source_ pointing to _target_;
+            Each hyperlink found in ~source~ pointing to ~target~;
             **Attributes**
-                _type_: The HTML element
-                _timestamp_: UTC date and time when _source_ was published,
+                ~type~: The HTML element
+                ~timestamp~: UTC date and time when ~source~ was published,
                   in ISO-8601 format
 
-    **_domain_**
+    **~domain~**
         **Directed, self-loop allowed**
         **Vertices**
             Domains of each URL
             **Attributes**
-                _name_: Domain name
-                _weight_: The number of files found under the domain
+                ~name~: Domain name
+                ~weight~: The number of files found under the domain
         **Edges**
-            Each hyperlink found in _source_ pointing to _target_ creates an
-              edge from _source:domain_ to _target:domain_; not repeated.
+            Each hyperlink found in ~source~ pointing to ~target~ creates an
+              edge from ~source:domain~ to ~target:domain~; not repeated.
             **Attributes**
-                _<tag names...>_: Each hyperlink in _source_ pointing to
-                  _target_ that is found on a particular HTML tag increases
-                  the _<tag>_ attribute by 1.
+                ~<tag names...>~: Each hyperlink in ~source~ pointing to
+                  ~target~ that is found on a particular HTML tag increases
+                  the ~<tag>~ attribute by 1.
 """

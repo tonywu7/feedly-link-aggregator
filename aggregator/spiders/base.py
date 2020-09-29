@@ -22,29 +22,22 @@
 
 from __future__ import annotations
 
-import logging
 import os
-import re
 import time
 from abc import ABC, abstractmethod
-from contextlib import suppress
 from datetime import datetime
-from pathlib import Path
 from pprint import pformat
 from typing import Optional, Union
-from urllib.parse import unquote
 
 from scrapy import Spider
+from scrapy.exceptions import CloseSpider
 from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
-from twisted.python.failure import Failure
 
-from ..config import Config
 from ..feedly import FeedlyEntry, build_api_url, get_feed_uri
-from ..requests import (FinishedRequest, ProbeRequest, ResumeRequest,
-                        reconstruct_request)
+from ..requests import ProbeFeed, RequestFinished, ResumeRequest
 from ..urlkit import build_urls, select_templates
-from ..utils import JSONDict, SpiderOutput
+from ..utils import LOG_LISTENER, JSONDict
 from ..utils import colored as _
 from ..utils import guard_json
 
@@ -52,19 +45,13 @@ from ..utils import guard_json
 class FeedlyRSSSpider(Spider, ABC):
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
-        'SPIDER_MIDDLEWARES': {
-            'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
-            'aggregator.middlewares.ConditionalDepthSpiderMiddleware': 100,
-            'aggregator.spiders.base.FetchSourceSpiderMiddleware': 500,
-            'aggregator.spiders.base.CrawledItemSpiderMiddleware': 700,
-        },
     }
 
     class SpiderConfig:
         OUTPUT = f'./crawl.{datetime.now().strftime("%Y%m%d%H%M%S")}'
 
-        FEED = 'https://xkcd.com/atom.xml'
-        FEED_TEMPLATES = {}
+        RSS = 'https://xkcd.com/atom.xml'
+        RSS_TEMPLATES = {}
 
         DOWNLOAD_ORDER = 'oldest'
         DOWNLOAD_PER_BATCH = 1000
@@ -83,32 +70,20 @@ class FeedlyRSSSpider(Spider, ABC):
         'alive+': {None: 1, True: -128, False: 1},
         'all': {None: 1, True: 1, False: 1},
     }
+    LOGSTATS_ITEMS = ['rss/page_count']
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
-        spider: FeedlyRSSSpider = super().from_crawler(crawler, *args, **kwargs)
+        spider: FeedlyRSSSpider = super().from_crawler(crawler, *args, config=crawler.settings, **kwargs)
         spider.stats = crawler.stats
         crawler.signals.connect(spider.open_spider, spider_opened)
         return spider
 
-    def __init__(self, name: Optional[str] = None, preset: Optional[str] = None, **kwargs):
+    def __init__(self, *, name=None, config, **kwargs):
         super().__init__(name=name, **kwargs)
 
-        kwargs = {k.upper(): v for k, v in kwargs.items()}
-        config = Config()
-        config.from_object(self.SpiderConfig)
-        if preset:
-            config.from_pyfile(preset)
-        config.merge(kwargs)
-
-        output_dir = Path(config['OUTPUT'])
-        config['OUTPUT'] = output_dir
+        output_dir = config['OUTPUT']
         os.makedirs(output_dir, exist_ok=True)
-
-        config.set('FEED', unquote(config.get('FEED')))
-
-        templates = {re.compile(k): v for k, v in config['FEED_TEMPLATES'].items()}
-        config['FEED_TEMPLATES'] = templates
 
         self.api_base_params = {
             'count': int(config['DOWNLOAD_PER_BATCH']),
@@ -117,31 +92,70 @@ class FeedlyRSSSpider(Spider, ABC):
             'unreadOnly': 'false',
         }
         self.config = config
-
-        self.logstats_items = ['rss/page_count']
+        self.resume_iter = None
 
     def open_spider(self, spider):
-        self.logger.info(f'Spider parameters:\n{pformat(self.config.copy_to_dict())}')
+        conf = self.config['SPIDER_CONFIG']
+        self.logger.info(f'Spider parameters:\n{pformat(conf.copy_to_dict())}')
 
     @abstractmethod
     def start_requests(self):
         yield ResumeRequest(callback=self.resume_crawl)
 
     def resume_crawl(self, response):
-        requests = response.meta.get('_requests', {}).values()
-        if not requests:
-            yield self.probe_feed(self.config['FEED'], meta={'reason': 'user_specified', 'depth': 1})
+        may_resume = False
+        meta = response.meta
+        freezer = meta.get('freezer', None)
+        if freezer is not None:
+            requests = freezer.defrost(self)
+            try:
+                req = next(requests)
+            except StopIteration:
+                pass
+            else:
+                may_resume = self.ask_if_resume(freezer)
+
+        if not may_resume:
+            feed = self.config['RSS']
+            freezer.dump_info({'crawling': feed})
+            yield self.probe_feed(feed, meta={'reason': 'user_specified', 'depth': 1})
+            return
+
+        self.logger.info(_('Resuming crawl.', color='cyan'))
+        self.resume_iter = requests
+        yield req
+
+    def ask_if_resume(self, freezer):
+        feed = self.config['RSS']
+        resume_feed = freezer.load_info().get('crawling')
+        if resume_feed != feed:
+            self.logger.info(_('Found unfinished crawl job:', color='cyan'))
+            self.logger.info(_(f"Continue crawling '{resume_feed}'?", color='cyan'))
+            self.logger.info(_(f"Start new crawl with '{feed}'?", color='cyan'))
+            self.logger.info(_('Or exit?', color='cyan'))
+            action = 'x'
         else:
-            self.logger.info(_(f'Resuming crawl with {len(requests)} request(s)', color='cyan'))
-            for cls, kwargs in requests:
-                yield reconstruct_request(cls, self, **kwargs)
+            action = 'c'
+
+        LOG_LISTENER.stop()
+        while action not in 'cse':
+            action = input('(continue/start/exit) [c]: ')[:1]
+        LOG_LISTENER.start()
+
+        if action == 'e':
+            raise CloseSpider()
+        elif action == 's':
+            freezer.clear()
+            freezer.dump_info({'crawling': feed})
+            return False
+        return True
 
     def get_streams_url(self, feed_id: str, **params) -> str:
         params = {**self.api_base_params, **params}
         return build_api_url('streams', streamId=feed_id, **params)
 
     def probe_feed(self, query: str, derive: bool = True, source: Optional[Request] = None, **kwargs):
-        templates = self.config['FEED_TEMPLATES']
+        templates = self.config['RSS_TEMPLATES']
         if derive and templates:
             try:
                 urls = build_urls(query, *select_templates(query, templates))
@@ -154,36 +168,26 @@ class FeedlyRSSSpider(Spider, ABC):
         prefix = self.config['STREAM_ID_PREFIX']
         meta = kwargs.pop('meta', {})
         meta['try_feeds'] = {f'{prefix}{u}': None for u in urls}
-        meta['search_query'] = query
-        return ProbeRequest(url=query, callback=self.start_feeds, meta=meta, source=source, **kwargs)
+        meta['feed_url'] = query
+        return ProbeFeed(url=query, callback=self.start_feeds, meta=meta, source=source, **kwargs)
 
     def start_feeds(self, response: TextResponse):
         meta = response.meta
-        yield FinishedRequest(meta={**meta})
+        yield RequestFinished(meta={**meta})
 
         feeds = meta.get('valid_feeds')
         if feeds is None:
             feeds = meta.get('try_feeds', {})
         if not len(feeds) and meta['reason'] == 'user_specified':
-            self.logger.info(f'No valid RSS feed can be found using `{meta["search_query"]}` and available feed templates.')
+            self.logger.info(f'No valid RSS feed can be found using `{meta["feed_url"]}` and available feed templates.')
             self.logger.critical('No feed to crawl!')
 
         yield from self.filter_feeds(feeds, meta)
         yield from self.get_feed_info(feeds, meta)
 
     def filter_feeds(self, feeds, meta):
-        if meta['reason'] == 'user_specified':
-            for feed in feeds:
-                yield self.next_page({'id': feed}, meta=meta, initial=True)
-            return
-
-        select = self.config.get('FEED_STATE_SELECT', 'all')
-        for feed, dead in feeds.items():
-            prio = self.SELECTION_STRATS[select][dead]
-            if not prio:
-                self.logger.info(_(f'Dropped {"dead" if dead else "living"} feed {feed[5:]}', color='grey'))
-            else:
-                yield self.next_page({'id': feed}, meta=meta, initial=True, priority=prio)
+        for feed in feeds:
+            yield self.next_page({'id': feed}, meta=meta, initial=True)
 
     def get_feed_info(self, feeds, meta):
         feed_info = meta.get('feed_info', {})
@@ -215,7 +219,7 @@ class FeedlyRSSSpider(Spider, ABC):
             meta['reason'] = 'continuation'
         elif not initial:
             meta['_persist'] = 'remove'
-            return FinishedRequest(meta=meta)
+            return RequestFinished(meta=meta)
 
         depth = meta.get('depth')
         reason = meta.get('reason')
@@ -256,72 +260,3 @@ class FeedlyRSSSpider(Spider, ABC):
             }
 
         yield self.next_page(data, response=response)
-
-
-class FetchSourceSpiderMiddleware:
-    def __init__(self):
-        self.logger = logging.getLogger('worker.fetchsource')
-        self.initialized = False
-
-    def init(self, spider: FeedlyRSSSpider):
-        self.scrape_source = spider.config.getbool('SCRAPE_SOURCE_PAGE', False)
-        self.initialized = True
-
-    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
-        if not self.initialized:
-            self.init(spider)
-        if not self.scrape_source:
-            yield from result
-
-        for data in result:
-            if isinstance(data, Request) or 'item' not in data or 'source_fetched' in data:
-                yield data
-                continue
-            item: FeedlyEntry = data['item']
-            yield Request(
-                item.url, callback=self.parse_source,
-                errback=self.handle_source_failure,
-                meta={'data': data},
-            )
-
-    def parse_source(self, response: TextResponse):
-        meta = response.meta
-        data = meta['data']
-        data['source_fetched'] = True
-        item: FeedlyEntry = data['item']
-        with suppress(AttributeError):
-            if response.status >= 400:
-                self.logger.debug(f'Dropping {response}')
-                raise AttributeError
-            body = response.text
-            item.add_markup('webpage', body)
-        yield data
-
-    def handle_source_failure(self, failure: Failure):
-        self.logger.debug(failure)
-        request = failure.request
-        data = request.meta['data']
-        data['source_fetched'] = True
-        yield data
-
-
-class CrawledItemSpiderMiddleware:
-    def __init__(self):
-        self.crawled_items = set()
-        self.initialized = False
-
-    def init(self, spider: FeedlyRSSSpider):
-        path = spider.config['OUTPUT'] / 'crawled_items.txt'
-        if path.exists():
-            with open(path, 'r') as f:
-                self.crawled_items |= set(f.read().split('\n'))
-        self.initialized = True
-
-    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedlyRSSSpider):
-        for data in result:
-            if isinstance(data, Request) or 'item' not in data:
-                yield data
-                continue
-            item: FeedlyEntry = data['item']
-            if item.url not in self.crawled_items:
-                yield data

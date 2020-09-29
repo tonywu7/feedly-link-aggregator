@@ -1,3 +1,20 @@
+def walk_package(path=None, name=__name__):
+    import pkgutil
+    from importlib.util import module_from_spec
+    from pathlib import Path
+    if not path:
+        path = Path(__file__).parent
+    for loader, module_name, is_pkg in pkgutil.walk_packages([str(path)]):
+        pkg_name = f'{name}.{module_name}'
+        if not is_pkg:
+            spec = loader.find_spec(pkg_name)
+            mod = module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            yield mod
+        else:
+            yield from walk_package(path / module_name, pkg_name)
+
+
 def _config_logging():
     # Aggressively take over control of logging from Scrapy
     # This function modifies sys.argv
