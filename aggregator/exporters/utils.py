@@ -114,7 +114,7 @@ def with_db(exporter):
         if not db_path.exists():
             raise FileNotFoundError(f'index.db not found in {wd}')
 
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, isolation_level=None)
         if db.is_locked(conn):
             log.error('Database was left in a partially consistent state.')
             log.error('Run `python -m aggregator check-db` to fix it first.')

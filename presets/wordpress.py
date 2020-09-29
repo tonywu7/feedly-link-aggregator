@@ -8,6 +8,6 @@ def template(base, match):
             yield f'{scheme}://{base.netloc}/{ending}'
 
 
-FEED_TEMPLATES = {
+RSS_TEMPLATES = {
     r'.*\.wordpress\.com/?.*': template,
 }

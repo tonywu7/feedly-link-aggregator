@@ -35,6 +35,7 @@ from pathlib import Path
 import simplejson as json
 from scrapy.exporters import JsonLinesItemExporter
 
+from .docs import OptionsContributor
 from .sql.db import db
 from .sql.factory import DatabaseVersionError
 from .sql.stream import DatabaseWriter
@@ -104,7 +105,7 @@ class SimpleJSONLinesExporter(JsonLinesItemExporter):
             self.file.write(serialized)
 
 
-class SQLiteExportPipeline:
+class SQLiteExportPipeline(OptionsContributor):
     def open_spider(self, spider):
         self.output_dir: Path = spider.config['OUTPUT']
         self.db_path = self.output_dir / 'index.db'
@@ -113,15 +114,14 @@ class SQLiteExportPipeline:
             debug = spider.config.getbool('SQL_DEBUG')
         except ValueError:
             debug = spider.config.get('SQL_DEBUG')
+        self.merge = not spider.config.getbool('DATABASE_NO_MERGE', False)
         self.init_stream(debug, buffering)
 
     def init_stream(self, debug, buffering):
         self.stream = DatabaseWriter(self.db_path, db, buffering=buffering, debug=debug)
 
     def close_stream(self):
-        self.stream.merge()
-        self.stream.close()
-        self.stream.cleanup()
+        self.stream.finish(self.merge)
 
     def process_item(self, data, spider):
         if 'item' in data:
@@ -175,11 +175,30 @@ class SQLiteExportPipeline:
     def close_spider(self, spider):
         self.close_stream()
 
+    @staticmethod
+    def _help_options():
+        return {
+            'DATABASE_CACHE_SIZE': """
+            Number of scraped records the program will keep in the memory before persisting
+            them to the database.
+
+            Default is `100000`.
+
+            A lower setting puts less stress on the memory but causes more frequent disk writes.
+            Note: frequency of database writes does not affect spider performance
+            because it is done in a separate process.
+
+            Setting this to ~1~ causes every record to be immediately written to the database;
+            Setting this to ~0~ causes the program to keep all scraped data in memory until the spider stops.
+            """,
+        }
+
+
 
 class DatabaseStorageProcess(ctx.Process):
     def __init__(
         self, db_path, item_queue: ctx.Queue, log_queue: ctx.Queue, err_queue: ctx.Queue,
-        ready: ctx.Event, closing: ctx.Event, buffering, debug, *args, **kwargs,
+        ready: ctx.Event, closing: ctx.Event, buffering, debug, *args, merge=True, **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.db_path = db_path
@@ -192,6 +211,7 @@ class DatabaseStorageProcess(ctx.Process):
         self.closing = closing
         self.stream: DatabaseWriter
         self._abort = 0
+        self._merge = merge
 
     def config_logging(self):
         handler = QueueHandler(self.log_queue)
@@ -243,9 +263,7 @@ class DatabaseStorageProcess(ctx.Process):
         if self._abort > 2:
             return
         try:
-            self.stream.merge()
-            self.stream.close()
-            self.stream.cleanup()
+            self.stream.finish(self._merge)
         except BaseException as e:
             self.err_queue.put_nowait(e)
 
@@ -355,7 +373,8 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
         self.process = DatabaseStorageProcess(
             self.db_path, item_queue, log_queue, err_queue,
-            ready, closing, buffering, debug, name='StorageProcess',
+            ready, closing, buffering, debug, merge=self.merge,
+            name='StorageProcess',
         )
         self.process.start()
         self.stream = self._WriterDelegate(item_queue, ready, closing, self.log, buffering * 5)
@@ -387,6 +406,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
     def process_item(self, data, spider):
         if self.closed:
+            self.log.warn('Record discarded because writer process was terminated.')
             return data
         self.check_error(spider)
         return super().process_item(data, spider)

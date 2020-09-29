@@ -21,40 +21,20 @@
 # SOFTWARE.
 
 import logging
-import re
-from functools import wraps
 from importlib import import_module
-from textwrap import dedent, indent
 
 import click
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
 from . import exporters
+from .docs import markdown_inline, numpydoc2click
 from .sql.cli import check, leftovers, merge, migrate
 
-
-def stylize(pattern, **styles):
-    def wrapper(func):
-        @wraps(func)
-        def wrapped(*args, **kwargs):
-            for s in func(*args, **kwargs):
-                yield re.sub(pattern, lambda m: click.style(m.group(1), **styles), s)
-        return wrapped
-    return wrapper
-
-
-def markdown_inline(func):
-    @stylize(re.compile(r'`(.*?)`'), fg='green')
-    @stylize(re.compile(r'_(.*?)_'), fg='blue', underline=True)
-    @stylize(re.compile(r'\*\*(.*?)\*\*'), fg='yellow', bold=True)
-    def f(*args, **kwargs):
-        yield from func(*args, **kwargs)
-    return f
+get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
 
 
 def get_help(ctx):
-    get_help_gen = markdown_inline(lambda ctx: (yield ctx.get_help()))
     return next(get_help_gen(ctx))
 
 
@@ -72,15 +52,17 @@ def cli(ctx, debug=False):
 
 
 def export_load_exporter(ctx: click.Context, param, value):
+    not_found = False
     try:
         exporter = import_module(f'.{value}', exporters.__name__)
         exporter.export
     except (AttributeError, ModuleNotFoundError):
+        not_found = True
         exporter = export
     if ctx.params.get('help'):
         ctx.meta['topic_name'] = value
         ctx.invoke(help_export, ctx, None, exporter)
-    elif exporter is None:
+    elif not_found:
         click.secho(str(ValueError(f"No exporter found for topic '{value}'")), fg='red')
         ctx.exit(1)
     return exporter
@@ -99,11 +81,11 @@ def help_export(ctx: click.Context, param, exporter):
     def help_subcommand():
         yield from [
             click.style('Data Exporter Help\n\n'.upper(), fg='black', bg='white', bold=True),
-            'For help on the syntax of the _export_ command itself, use `export --help`.\n\n',
+            'For help on the syntax of the ~export~ command itself, use `export --help`.\n\n',
             click.style(ctx.meta['topic_name'], fg='black', bg='magenta', bold=True),
         ]
         doc = numpydoc2click(exporter.help_text)
-        yield click.style(' - ' + next(doc) + '\n', fg='black', bg='magenta', bold=True)
+        yield click.style(' - ' + next(doc), fg='black', bg='magenta', bold=True)
         yield from doc
     click.echo_via_pager(help_subcommand())
     ctx.exit()
@@ -161,8 +143,9 @@ def export(topic, exporter_args, **kwargs):
 @click.option('-p', 'preset')
 def run_spider(spider, preset, **kwargs):
     settings = get_project_settings()
+    settings['PRESET'] = preset
     process = CrawlerProcess(settings, install_root_handler=False)
-    process.crawl(spider, preset=preset)
+    process.crawl(spider)
     process.start(stop_after_crawl=True)
 
 
@@ -214,19 +197,13 @@ def consume_leftovers(ctx, wd, debug=False, **kwargs):
     ctx.exit(leftovers(wd, debug=debug))
 
 
-def numpydoc2click(doc: str):
-    PARA = re.compile(r'((?:.+\n)+)')
-    PARA_WITH_HEADER = re.compile(r'(^ *)(.+)\n(?:\s*(?:-+|=+))\n((?:.+\n)+)')
-    paragraphs = list(PARA.findall(dedent(doc)))
-    yield paragraphs[0]
-    for i in range(1, len(paragraphs)):
-        p = paragraphs[i]
-        match = PARA_WITH_HEADER.match(p)
-        if match:
-            indentation, header, p = match.group(1), match.group(2), match.group(3)
-            if not indentation:
-                header = header.upper()
-            yield indent(click.style(header, bold=True), indentation)
-            yield '\n'
-        yield indent(p, '    ')
-        yield '\n'
+@cli.command()
+def customizations():
+    """List available spider options."""
+
+    from . import walk_package
+    for _ in walk_package():
+        pass
+
+    from .docs import OptionsContributor
+    click.echo_via_pager(OptionsContributor.format_docs())

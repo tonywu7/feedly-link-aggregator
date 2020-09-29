@@ -148,9 +148,9 @@ Select and export URLs in various formats.
 
 Synopsis
 --------
-export _urls_ -i <input> [**-o** _name or template_] [[**+f|-f** _filter_]...]
-  [**key=**_attrs..._] [**format=**_lines|csv_]
-  [**escape=**_none|percent|replace|unquote|unquote-replace_]
+export ~urls~ -i <input> [**-o** ~name or template~] [[**+f|-f** ~filter~]...]
+  [**key=**~attrs...~] [**format=**~lines|csv~]
+  [**escape=**~none|percent|replace|unquote|unquote-replace~]
 
 Description
 -----------
@@ -168,31 +168,32 @@ Options
 This exporter supports the following parameters, specified as `key=value` pairs,
 in addition to the exporter options:
 
-    _format=lines|csv_
-        Output format. Default is _lines_.
+    ~format=lines|csv~
+        Output format. Default is ~lines~.
 
-    _key=[...]_
+    ~key=[...]~
         What data to export, specified as one or more comma-separated attribute
-          names (see **_Available attributes_**).
-        If format is _lines_, you may only choose one attribute,
+          names (see **~Available attributes~**).
+        If format is ~lines~, you may only choose one attribute,
           e.g. `key=target:netloc`.
-        If format is _csv_, you may export multiple attributes,
+        If format is ~csv~, you may export multiple attributes,
           e.g. `key=source:netloc,tag`
-        Default is _target:url_ for _lines_, and _all attributes_ for _csv_.
+        Default is ~target:url~ for ~lines~, and ~all attributes~ for ~csv~.
 
-    _escape=none|percent|replace|unquote|unquote-replace_
+    ~escape=none|percent|replace|unquote|unquote-replace~
         Escape filenames. This is useful if you want URL path names to be part
           of the filename.
-        _percent_ will use URL percent-encodings. For example, space characters
+        ~percent~ will use URL percent-encodings. For example, space characters
           will be encoded as `%20`.
-        _replace_ will aggressively replace all punctuations and characters not
+        ~replace~ will aggressively replace all punctuations and characters not
           in the ISO-8859-1 encoding with `-`.
-        _unquote_ is the inverse of _percent_: replace all percent-encoded
+        ~unquote~ is the inverse of ~percent~: replace all percent-encoded
           characters with the original ones.
-        _unquote-replace_ first unquotes the filename, then uses _replace_ on it
-        Default (when unspecified) is _none_.
+        ~unquote-replace~ first unquotes the filename, then uses ~replace~ on it
+        Default (when unspecified) is ~none~.
 
-    Example:
+    Example
+    -------
         `python -m export urls -i input -o out.txt format=csv` \\
             `key=source:netloc,tag`
 
@@ -231,7 +232,7 @@ such as `%(target:url).10s.txt`.
                     `www.barnesandnoble.com.csv`
                     `...`
 
-See **_Available attributes_** for a list of available placeholders.
+See **~Available attributes~** for a list of available placeholders.
 
 Filters
 -------
@@ -241,24 +242,24 @@ as well as feed attributes such as names and dates published.
 Filters are specified using the **--include/--exclude** options
 (shorthands **+f/-f**).
 
-Each filter is a space-separated tuple _attr predicate value_, where _attr_ is
-one of the **_available attributes_** to test against, _value_ is the value for
-testing, and _predicate_ is one of the following:
+Each filter is a space-separated tuple ~attr predicate value~, where ~attr~ is
+one of the **~available attributes~** to test against, ~value~ is the value for
+testing, and ~predicate~ is one of the following:
 
-    _is_
+    ~is~
         Equivalent to `==`
 
-    _gt_, _ge_, _lt_, _le_
+    ~gt~, ~ge~, ~lt~, ~le~
         For integer types (such as date values).
         Equivalent to `>`, `>=`, `<`, `<=`.
 
-    _startswith_, _endswith_, _contains_
+    ~startswith~, ~endswith~, ~contains~
         For string types.
         Equivalent to `str.startswith`, `str.endswith`, and the `in` operator.
 
-    _under_
-        Only for domain name attributes (_...:netloc_)
-        True if the tested value is or is a subdomain of _value_, and
+    ~under~
+        Only for domain name attributes (~...:netloc~)
+        True if the tested value is or is a subdomain of ~value~, and
         False otherwise.
 
 **+f/-f** can be specified multiple times to enable multiple filters. Only URLs
@@ -288,79 +289,79 @@ that pass all filters are exported.
 
 Available attributes
 --------------------
-Each attribute is in the form of either _object_ or _object:key_.
+Each attribute is in the form of either ~object~ or ~object:key~.
 
     Objects
     -------
-    **URL objects:** _source_, _target_, _feed_
+    **URL objects:** ~source~, ~target~, ~feed~
 
-        _source_ is the URL to the webpage containing the HTML markup. It is
+        ~source~ is the URL to the webpage containing the HTML markup. It is
           returned by Feedly.
-        _target_ is the URL found in HTML tags in the _source_'s markup.
-        _feed_ is the feed URL.
-            (That is, _source_, which is scraped from _feed_, contains a
-              hyperlink that points to _target_).
+        ~target~ is the URL found in HTML tags in the ~source~'s markup.
+        ~feed~ is the feed URL.
+            (That is, ~source~, which is scraped from ~feed~, contains a
+              hyperlink that points to ~target~).
 
         **Keys**: For each kind of URL object, the following keys are available:
 
-            _url_: The complete URL.
-            _scheme_: The protocol of the URL e.g. `http` and `https`.
-            _netloc_: The domain name of the URL e.g. `example.org`.
-            _path_: The path of the URL, with the beginning slash.
-            _query_: Query string of the URL without `?`, if any
+            ~url~: The complete URL.
+            ~scheme~: The protocol of the URL e.g. `http` and `https`.
+            ~netloc~: The domain name of the URL e.g. `example.org`.
+            ~path~: The path of the URL, with the beginning slash.
+            ~query~: Query string of the URL without `?`, if any
             (These are the attribute names from the
-              _`urllib.parse.urlsplit`_ namedtuple.)
+              ~`urllib.parse.urlsplit`~ namedtuple.)
 
             Example
             -------
-            For a _feed_ `https://xkcd.com/atom.xml`, which has a webpage
-            `https://xkcd.com/937/`, which is the _source_, which contains a
-            _target_ image `https://imgs.xkcd.com/comics/tornadoguard.png`:
+            For a ~feed~ `https://xkcd.com/atom.xml`, which has a webpage
+            `https://xkcd.com/937/`, which is the ~source~, which contains a
+            ~target~ image `https://imgs.xkcd.com/comics/tornadoguard.png`:
 
-            _target:url_ is `https://imgs.xkcd.com/comics/tornadoguard.png`
-            _target:netloc_ is `imgs.xkcd.com`
-            _source:netloc_ is `xkcd.com`
-            _feed:netloc_ is `xkcd.com`
-            _source:path_ is `/937/`
-            _feed:path_ is `/atom.xml`
+            ~target:url~ is `https://imgs.xkcd.com/comics/tornadoguard.png`
+            ~target:netloc~ is `imgs.xkcd.com`
+            ~source:netloc~ is `xkcd.com`
+            ~feed:netloc~ is `xkcd.com`
+            ~source:path~ is `/937/`
+            ~feed:path~ is `/atom.xml`
 
-    **HTML tag object**: _tag_
+    **HTML tag object**: ~tag~
 
-        This is the HTML markup tag on which a _target_ URL is found.
+        This is the HTML markup tag on which a ~target~ URL is found.
           It has no keys.
         This could be `a` (HTML anchor tag, clickable link),
           `img` (image tag), `source` (audio/video source tag), etc.
 
-    **Datetime object**: _published_
+    **Datetime object**: ~published~
 
-        Date and time at which a _source_ is published. All _target_s from a
-          _source_ will have the same _published_ date.
+        Date and time at which a ~source~ is published. All ~target~s from a
+          ~source~ will have the same ~published~ date.
         All dates are in UTC time.
 
         **Keys**:
 
-            _date_
+            ~date~
                 The complete datetime string in the ISO-8601 format, such as
                   `1970-01-01T00:00:00+00:00`.
-                Can be used with string operators such as _startswith_:
+                Can be used with string operators such as ~startswith~:
                   `published:date startswith 1970-01`.
-            _year_, _month_, _day_, _hour_, _minute_, _second_
-                Each is an integer. _hour_ is in 24-hour format.
+            ~year~, ~month~, ~day~, ~hour~, ~minute~, ~second~
+                Each is an integer. ~hour~ is in 24-hour format.
 
             Example
             -------
-            For the _source_ `https://xkcd.com/937/` which was published on
+            For the ~source~ `https://xkcd.com/937/` which was published on
               `Fri, 12 Aug 2011 at 04:05:04 GMT`,
-            _published:date_ is `2011-08-12T04:05:04+00:00`
-            _published:year_ is `2011`
-            _published:month_ is `8`.
+            ~published:date~ is `2011-08-12T04:05:04+00:00`
+            ~published:year~ is `2011`
+            ~published:month~ is `8`.
 
-    **Titles**: _source:title_, _feed:title_
+    **Titles**: ~source:title~, ~feed:title~
 
-        In addition to representing URLs, _source_ and _feed_ also has a
-        _:title_ key which is the title of the post and the feed, respectively.
+        In addition to representing URLs, ~source~ and ~feed~ also has a
+        ~:title~ key which is the title of the post and the feed, respectively.
 
-    **Feed status**: _feed:isdead_
+    **Feed status**: ~feed:isdead~
 
         Whether a feed is dead (unreachable or no longer updated) or alive.
         Value can be `True` (dead), `False` (alive), or `None` (unknown).

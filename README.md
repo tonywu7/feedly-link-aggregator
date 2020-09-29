@@ -34,14 +34,14 @@ Install dependencies:
 Then start crawling:
 
 ```bash
-> scrapy crawl feed -a feed='<url>' -a output='<dir>'
+> scrapy crawl feed -s feed='<url>' -s output='<dir>'
 ```
 
 where `<url>` is the URL to your RSS feed, and `<dir>` is the directory where scraped data and temporary files will be saved.
 For example,
 
 ```bash
-> scrapy crawl feed -a feed="https://xkcd.com/atom.xml" -a output=instance/xkcd/
+> scrapy crawl feed -s feed="https://xkcd.com/atom.xml" -s output=instance/xkcd/
 ```
 
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
@@ -57,20 +57,20 @@ where `<dir>` is the same directory.
 ### Crawling
 
 ```bash
-> scrapy crawl <spider> -a feed='<url>' -a output='<dir>' [-a additional options...]
+> scrapy crawl <spider> -s feed='<url>' -s output='<dir>' [-s additional options...]
 ```
 
 Currently available spiders are `feed` and `cluster`. `feed` crawls a single feed; [`cluster`](#cluster-spider) begins with a single feed
 but attempts to further explore websites that are mentioned in the beginning feed.
 
-Each spider option is specified using the `-a` option followed by a `key=value` pair.
+Each spider option is specified using the `-s` option followed by a `key=value` pair.
 
 ### Presets
 
 In addition to specifying options via the command line, you can also specify a preset.
 
 ```bash
-> scrapy crawl <spider> -a preset='<path-to-file>'
+> scrapy crawl <spider> -s preset='<path-to-file>'
 ```
 
 A preset is a just a Python script whose top-level variable names and values are used as key-value pairs to populate
@@ -78,7 +78,7 @@ the spider config:
 
 ```python
 from datetime import datetime
-FEED = 'https://xkcd.com/atom.xml'
+RSS = 'https://xkcd.com/atom.xml'
 OUTPUT = f'instance/xkcd-{datetime.now()}'
 ...
 ```
@@ -87,7 +87,7 @@ Only variables whose names contain only uppercase letters, numbers and underscor
 
 Presets also let you define more complex behaviors, such as URL filtering, since you can define functions and mappings.
 
-For a list of supported options, see [`presets/example.py`](./presets/example.py). Options that are
+For a list of supported options, run `python -m aggregator customizations`. Options that are
 simple string/integer values can also be specified on the command line with a case-insensitive key, in which case they take
 precedence over the ones defined in a preset.
 
@@ -197,12 +197,12 @@ Version v0.10 introduces a new spider called `cluster`. As the name suggests, th
 
 How it works:
 
-1. The spider begins with a single feed, specified throught the `FEED` option.
+1. The spider begins with a single feed, specified throught the `RSS` option.
 2. As it crawls through the beginning feed, it parses the HTML markup snippets provided by Feedly, extracting URLs from them.
 3. For each website it encounters, it will check to see if they exist as a valid RSS feed on Feedly, and if yes,
 then it will start crawling that website too.
 4. This process continues, until either
-    - a depth limit is hit (specified with `-a depth_limit <depth>`, or in a preset file as `DEPTH_LIMIT`), then it will finish crawling the feeds that are
+    - a depth limit is hit (specified with `-s depth_limit=<depth>`, or in a preset file as `DEPTH_LIMIT`), then it will finish crawling the feeds that are
     `depth + 1` degrees removed from the starting feed, but will not expand beyond them; or
     - the spider was interrupted.
 
@@ -212,7 +212,7 @@ How many sites the spider can crawl will depend on whether it can find out a val
 you can define your templates like such:
 
     ```python
-    FEED_TEMPLATES = {
+    RSS_TEMPLATES = {
         r'.*\.wordpress\.com.*': {  # will match *.wordpress.com
             'http://%(netloc)s/?feed=rss': 100,  # number denotes precedence 
             'http://%(netloc)s/?feed=rss2': 200,
@@ -227,7 +227,7 @@ you can define your templates like such:
 
     Then, if a WordPress site mentions another WordPress site, the spider will try each variation until it hits a valid feed on Feedly.
 
-- Or, you may also enable the search function (`-a enable_search=True`, or in preset: `ENABLE_SEARCH = True`). This will let the spider search Feedly
+- Or, you may also enable the search function (`-s enable_search=True`, or in preset: `ENABLE_SEARCH = True`). This will let the spider search Feedly
 for each domain name it encounters, and crawl all returned feed.
 
     ![#e5c07b](https://placehold.it/12/e5c07b/000000?text=+) **Warning: This is not recommended as the spider can quickly get rate-limited by Feedly.**

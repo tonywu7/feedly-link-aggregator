@@ -1,5 +1,3 @@
-from urllib.parse import urlsplit
-
 FOLLOW_DOMAINS = {'tumblr.com'}
 FEED_STATE_SELECT = 'dead+'
 
@@ -17,31 +15,25 @@ def deactivated_converter(base, match):
     yield from converter(base, match)
 
 
-FEED_TEMPLATES = {
+RSS_TEMPLATES = {
     r'https?://(.*)-deactivated\d*\.tumblr\.com/?.*': deactivated_converter,
     r'.*\.tumblr\.com/?.*': converter,
 }
 
-
-ignored_tumblrs = {
+TUMBLR_IGNORE = {
     'www.tumblr.com', 'staff.tumblr.com', 'tumblr.com',
     'engineering.tumblr.com', 'support.tumblr.com',
     'assets.tumblr.com',
 }
 
+PRIORITIZED_KEYWORDS = {
+    10: ['cats', 'kitties'],
+    5: ['dogs', 'puppies'],
+    -5: ['goldfish'],
+    -float('inf'): ['rat'],
+}
 
-def filter_tumblr(request, spider):
-    feed_url = request.meta.get('feed_url') or request.meta.get('search_query')
-    if not feed_url:
-        return True
-    domain = urlsplit(feed_url).netloc
-    if domain in ignored_tumblrs:
-        return False
-    if domain[-16:] == 'media.tumblr.com':
-        return False
-    return True
-
-
-REQUEST_FILTERS = {
-    filter_tumblr: 200,
+CONTRIB_SPIDER_MIDDLEWARES = {
+    'aggregator.contrib.filters.KeywordPrioritizer': 500,
+    'aggregator.contrib.tumblr.TumblrFilter': 505,
 }

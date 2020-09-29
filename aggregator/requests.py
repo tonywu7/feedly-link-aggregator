@@ -37,17 +37,17 @@ class ResumeRequest(DummyRequest):
         super().__init__(callback=callback, meta={'_persist': 'release'}, **kwargs)
 
 
-class FinishedRequest(DummyRequest):
+class RequestFinished(DummyRequest):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.meta['_persist'] = 'remove'
 
 
-class ProbeRequest(Request):
+class ProbeFeed(Request):
     def __init__(self, *, url, callback, source=None, **kwargs):
         meta = kwargs.pop('meta', {})
         meta['_persist'] = 'add'
-        meta['pkey'] = (meta['search_query'], 'search')
+        meta['pkey'] = (meta['feed_url'], 'search')
         super().__init__(url=url, callback=callback, meta=meta, **kwargs)
         self.priority = source.priority - 1 if source else self.priority - 1
 

@@ -1,5 +1,11 @@
 ## Changelog
 
+- **v0.10.6**
+    - Performance update.
+    - Fixed memory leak issues with the request persistence module.
+    - **![#f06073](https://placehold.it/12/f06073/000000?text=+) This version introduces API-breaking changes.**
+        - Package name has changed.
+        - Spider options must now be specified using the `-s` command-line option, and not `-a`.
 - **v0.10.5**
     - _On-the-fly persistence:_ Instead of writing scraped data to a temporary file, then digest that file once crawling is finished
     the program now write to databases while scraping, using a separate process.

@@ -311,6 +311,19 @@ class DatabaseWriter:
             shm.unlink()
             wal.unlink()
 
+    def finish(self, merge=True):
+        if not merge:
+            self.cork()
+            self.close()
+            return
+        try:
+            self.merge()
+            self.close()
+        except Exception:
+            raise
+        else:
+            self.cleanup()
+
     def _tally(self, conn):
         count = self.db.count_rows(conn)
         diff = {t: v is not None and count[t] - v for t, v in self._rowcounts[conn].items()}

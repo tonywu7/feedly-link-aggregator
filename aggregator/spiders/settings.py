@@ -20,43 +20,39 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import json
 import re
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-
-from scrapy.settings import BaseSettings
-
-from .datastructures import compose_mappings
+from typing import List
+from urllib.parse import unquote
 
 
-class Config(BaseSettings):
-    def from_json(self, path):
-        with open(path) as f:
-            self.merge(json.load(f))
-
-    def from_pyfile(self, path):
-        spec = spec_from_file_location('aggregator.user_preset', path)
-        mod = module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self.from_object(mod)
-
-    def from_object(self, obj):
-        keys = dir(obj)
-        self.merge({k: getattr(obj, k) for k in keys if k.isupper()})
-
-    def merge(self, other):
-        d = compose_mappings(self, other)
-        self.clear()
-        self.update(d)
-
-    def get_namespace(self, prefix):
-        length = len(prefix)
-        d = Config({k[length:].lower(): v for k, v in self.items() if k[:length] == prefix})
-        return d
+def single_item(f):
+    def wrapped(*args, **kwargs):
+        return {f.__name__.upper(): f(*args, **kwargs)}
+    return wrapped
 
 
-transformers = {
-    'OUTPUT': lambda text: Path(text),
-    'FEED_TEMPLATES': lambda text: {re.compile(k): v for k, v in json.loads(text)},
-}
+class SettingsAdapter:
+    @staticmethod
+    def output(v):
+        p = Path(v)
+        return {'OUTPUT': p, 'JOBDIR': p / 'scheduled/jobs'}
+
+    @staticmethod
+    @single_item
+    def rss(v):
+        return unquote(v)
+
+    @staticmethod
+    @single_item
+    def rss_templates(conf):
+        return {re.compile(k): v for k, v in conf.items()}
+
+    @staticmethod
+    @single_item
+    def follow_domains(domains):
+        if isinstance(domains, str):
+            domains = set(domains.split(' '))
+        elif isinstance(domains, List):
+            domains = set(domains)
+        return domains

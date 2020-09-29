@@ -51,16 +51,22 @@ DEFAULT_REQUEST_HEADERS = {
 
 # Enable or disable spider middlewares
 # See https://docs.scrapy.org/en/latest/topics/spider-middleware.html
-# SPIDER_MIDDLEWARES = {
-#    'aggregator.middlewares.FeedlySpiderMiddleware': 543,
-# }
+SPIDER_MIDDLEWARES = {
+    'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
+    'aggregator.middlewares.RequestDefrosterSpiderMiddleware': 100,
+    'aggregator.middlewares.DerefItemSpiderMiddleware': 101,
+    'aggregator.middlewares.OffsiteFeedSpiderMiddleware': 500,
+    'aggregator.middlewares.ConditionalDepthSpiderMiddleware': 550,
+    'aggregator.middlewares.FetchSourceSpiderMiddleware': 600,
+    'aggregator.middlewares.CrawledItemSpiderMiddleware': 800,
+    'aggregator.spiders.cluster.ExplorationSpiderMiddleware': 900,
+}
 
 HTTPERROR_ALLOWED_CODES = [403, 404]
 
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
-    'aggregator.middlewares.RequestFilterDownloaderMiddleware': 100,
     'aggregator.middlewares.RequestPersistenceDownloaderMiddleware': 150,
     'aggregator.middlewares.FeedProbingDownloaderMiddleware': 200,
     'aggregator.middlewares.HTTPErrorDownloaderMiddleware': 500,
@@ -71,8 +77,11 @@ DOWNLOADER_MIDDLEWARES = {
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
+    'aggregator.extensions.SettingsLoader': 100,
+    'aggregator.extensions.ContribMiddleware': 101,
     'aggregator.extensions.LogStatsExtended': 500,
-    # 'aggregator.extensions.CProfile': 1000,
+    'aggregator.extensions.GlobalPersistence': 999,
+    'aggregator.extensions.CProfile': 1000,
 }
 
 # Configure item pipelines
@@ -105,3 +114,5 @@ AUTOTHROTTLE_DEBUG = False
 # HTTPCACHE_DIR = 'httpcache'
 # HTTPCACHE_IGNORE_HTTP_CODES = []
 # HTTPCACHE_STORAGE = 'scrapy.extensions.httpcache.FilesystemCacheStorage'
+
+DEPTH_LIMIT = 1

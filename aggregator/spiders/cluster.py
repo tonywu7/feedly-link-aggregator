@@ -21,55 +21,19 @@
 # SOFTWARE.
 
 import logging
-from typing import List
 from urllib.parse import urlsplit
 
+from scrapy.crawler import Crawler
+from scrapy.exceptions import NotConfigured
 from scrapy.http import Request, TextResponse
 
 from ..datastructures import compose_mappings
+from ..docs import OptionsContributor
 from ..feedly import FeedlyEntry
-from ..requests import FinishedRequest
+from ..requests import RequestFinished
 from ..utils import SpiderOutput
+from ..utils import colored as _
 from .base import FeedlyRSSSpider
-
-
-class FeedClusterSpider(FeedlyRSSSpider):
-    name = 'cluster'
-
-    custom_settings = compose_mappings(FeedlyRSSSpider.custom_settings, {
-        'SPIDER_MIDDLEWARES': {
-            'aggregator.spiders.cluster.ExplorationSpiderMiddleware': 900,
-        },
-        'DEPTH_PRIORITY': 1,
-        'SCHEDULER_DISK_QUEUE': 'scrapy.squeues.PickleFifoDiskQueue',
-        'SCHEDULER_MEMORY_QUEUE': 'scrapy.squeues.FifoMemoryQueue',
-    })
-
-    class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
-        FOLLOW_DOMAINS = None
-        DEPTH_LIMIT = 1
-
-    def __init__(self, name=None, **kwargs):
-        super().__init__(name=name, **kwargs)
-
-        domains = self.config['FOLLOW_DOMAINS']
-        if isinstance(domains, str):
-            domains = set(domains.split(' '))
-        elif isinstance(domains, List):
-            domains = set(domains)
-        self.config['FOLLOW_DOMAINS'] = domains
-
-        self.logstats_items.extend([
-            'rss/hyperlink_count',
-            'cluster/1_discovered_nodes',
-            'cluster/2_scheduled_nodes',
-            'cluster/3_finished_nodes',
-            'cluster/4_explored',
-            'cluster/5_maxdepth',
-        ])
-
-    def start_requests(self):
-        return super().start_requests()
 
 
 class ExplorationSpiderMiddleware:
@@ -77,17 +41,20 @@ class ExplorationSpiderMiddleware:
     def from_crawler(cls, crawler):
         return cls(crawler)
 
-    def __init__(self, crawler):
+    def __init__(self, crawler: Crawler):
+        if crawler.spidercls is not FeedClusterSpider:
+            raise NotConfigured()
+
         self.stats = crawler.stats
         self.logger = logging.getLogger('explore')
         self._discovered = set()
         self._finished = set()
 
-    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider: FeedClusterSpider):
+    def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider):
         depth = response.meta.get('depth', 0)
         self.stats.max_value('cluster/5_maxdepth', depth)
         for data in result:
-            if isinstance(data, FinishedRequest):
+            if isinstance(data, RequestFinished):
                 self.update_finished(data)
             if isinstance(data, Request):
                 yield data
@@ -101,7 +68,7 @@ class ExplorationSpiderMiddleware:
     def process_item(
         self, response: TextResponse,
         item: FeedlyEntry, depth: int,
-        spider: FeedClusterSpider,
+        spider,
     ):
         dest = {urlsplit(k): v for k, v in item.hyperlinks.items()}
         dest = {k: v for k, v in dest.items() if k.netloc}
@@ -143,3 +110,106 @@ class ExplorationSpiderMiddleware:
             return
         ratio = finished / scheduled
         self.stats.set_value('cluster/4_explored', f'{ratio * 100:.2f}%')
+
+
+class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
+    """
+    Spider to crawl a group of feeds.
+
+    It works by recursively trying to crawl websites found in the contents of a feed,
+    until it hits the depth limit, or until no more crawlable website can be found.
+
+    Usage
+    -----
+    `scrapy crawl cluster -s OPTIONS=... ...`
+
+    This spider supports all options supported by the single feed spider.
+    """
+
+    name = 'cluster'
+
+    custom_settings = compose_mappings(FeedlyRSSSpider.custom_settings, {
+        'DEPTH_PRIORITY': 1,
+        'SCHEDULER_DISK_QUEUE': 'scrapy.squeues.PickleFifoDiskQueue',
+        'SCHEDULER_MEMORY_QUEUE': 'scrapy.squeues.FifoMemoryQueue',
+    })
+
+    LOGSTATS_ITEMS = [
+        *FeedlyRSSSpider.LOGSTATS_ITEMS,
+        'rss/hyperlink_count',
+        'cluster/1_discovered_nodes',
+        'cluster/2_scheduled_nodes',
+        'cluster/3_finished_nodes',
+        'cluster/4_explored',
+        'cluster/5_maxdepth',
+    ]
+
+    class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
+        FOLLOW_DOMAINS = None
+        DEPTH_LIMIT = 1
+
+    def start_requests(self):
+        return super().start_requests()
+
+    def filter_feeds(self, feeds, meta):
+        if meta['reason'] == 'user_specified':
+            for feed in feeds:
+                yield self.next_page({'id': feed}, meta=meta, initial=True)
+            return
+
+        select = self.config.get('FEED_STATE_SELECT', 'all')
+        for feed, dead in feeds.items():
+            prio = self.SELECTION_STRATS[select][dead]
+            if not prio:
+                self.logger.info(_(f'Dropped {"dead" if dead else "living"} feed {feed[5:]}', color='grey'))
+            else:
+                yield self.next_page({'id': feed}, meta=meta, initial=True, priority=prio)
+
+    @staticmethod
+    def _help_options():
+        return {
+            'FOLLOW_DOMAINS': """
+            Only nodes whose domains or parent domains are included here will be expanded upon.
+
+            Value should be a collection of domains. (Other nodes are still recorded,
+            but are not used to find new feeds).
+
+            If set to None, spider will not filter nodes based on domains.
+
+            **Example**
+                `FOLLOW_DOMAINS = ['tumblr.com', 'wordpress.com']`
+            """,
+            'DEPTH_LIMIT': """
+            How much the spider will expand the cluster. Value should be an integer.
+
+            (This is the same settings as the one used by the built-in ~DepthMiddleware~.)
+
+            Nodes that are more than `depth + 1` degree removed from the starting feed
+            will not be expanded upon.
+
+            If set to ~1~, only the starting feed will be crawled.
+            If set to ~0~ or ~None~, spider will keep crawling until manually stopped.
+            """,
+            'FEED_STATE_SELECT': """
+            Only crawl feeds that are of a certain `state`.
+
+            A feed can be in one of two states:
+            `dead`    - The feed URL is unreachable (e.g. timed out); or a HEAD request
+                          returns a status code other than `200 OK`, `206 Partial`, or
+                          `405 Method Not Allowed`;
+                          or the responded MIME type is anything other than that of a
+                          valid RSS feed `(text/xml, application/xml, application/rss+xml,`
+                          `application/rdf+xml, application/atom+xml)`.
+            `alive`   - All other feeds are considered alive.
+
+            This option accepts the following values:
+            ~all~     - Do not filter feeds based on their state
+            ~dead~    - Only crawl dead feeds
+            ~alive~   - Only crawl living feeds
+            ~dead+~   - Crawl all feeds, but dead feeds receive a higher priority
+            ~alive+~  - Crawl all feeds, but living feeds receive a higher priority
+
+            Note that values other than `all` cause the spider to send a HEAD request to
+            each feed URL about to be crawled, which will add a slight overhead to the running time.
+            """,
+        }
