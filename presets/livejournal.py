@@ -1,3 +1,5 @@
+DEPTH_LIMIT = 2
+
 FOLLOW_DOMAINS = {'livejournal.com'}
 
 RSS_TEMPLATES = {

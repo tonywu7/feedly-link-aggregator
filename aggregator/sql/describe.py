@@ -98,11 +98,13 @@ def describe_database(path, out):
     vers['insert'] = 'INSERT OR REPLACE INTO __version__ (version) VALUES (?)'
 
     init: List[str] = schema.init
+    tables_create = {}
     indices_create = {}
     for t in tables:
-        init.append(create_table(t))
+        tables_create[t.name] = create_table(t)
         indices_create.update(create_index(t))
     meta['init'] = init
+    meta['tables'] = tables_create
     meta['indices'] = indices_create
 
     models = meta['models'] = {}

@@ -30,7 +30,7 @@ from scrapy.utils.url import url_is_from_any_domain
 
 from .utils import with_db
 
-log = logging.getLogger('exporter.fringe')
+log = logging.getLogger('exporter.uncharted')
 
 
 def parse_filters(ls):
@@ -46,7 +46,7 @@ def parse_filters(ls):
 @with_db
 def export(conn: sqlite3.Connection, wd: Path, output: Path,
            include=None, exclude=None,
-           fmt='fringe.json', *args, **kwargs):
+           fmt='uncharted.json', *args, **kwargs):
 
     temp = """
     CREATE TEMP TABLE domains (id INTEGER, domain VARCHAR)
@@ -131,16 +131,17 @@ def export(conn: sqlite3.Connection, wd: Path, output: Path,
 
 
 help_text = """
-Export a list of websites that are on the fringe in a cluster of feed.
+Export a list of websites that are "uncharted" — websites that were not scraped
+as RSS feeds during a crawl, but were recorded in the database because other
+feeds mentioned them.
 
 That is, if you are using the cluster spider, this exporter will export the list
 of websites that are not crawled due to the spider hitting the depth limit
 — the outermost nodes.
 
-(In graph terms, this exporter exports all vertices whose indegree is 1.)
-
-Note that websites that are on the "fringe" because they were filtered out
-by the domain filter (instead of hitting the depth limit) will also be included
-here. To only export sites under a certain domain, use ~+f domain under ...~,
-to exclude a certain domain, use ~-f domain under ...~.
+Note that websites that are "uncharted" because they were filtered out by the
+domain filter (instead of hitting the depth limit) or because they were not
+RSS feeds in the first place will also be included here. To only export sites
+under a certain domain, use ~+f domain under ...~, to exclude a certain domain,
+use ~-f domain under ...~.
 """

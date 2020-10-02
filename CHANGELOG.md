@@ -1,5 +1,24 @@
 ## Changelog
 
+- **v0.10.10**
+    - Architectural update:
+        - Signal-based request persistence and restoration.
+        - Accept and log stats from any components.
+        - Accept and persist state info from any components.
+        - More thread-based I/O for better and more robuse performance.
+    - NEW exporter _uncharted_: Export a list of websites that are "uncharted" — websites that were not scraped
+    as RSS feeds during a crawl, but were recorded in the database because other feeds mentioned them.
+    - NEW middleware `KeywordPrioritizer`: Adjust the priority of a request based on the frequency of specified
+    keywords in its text content.
+    - NEW option `CONTRIB_SPIDER_MIDDLEWARE`: Use additional spider middlewares together with those defined
+    in the settings. Suitable for defining custom filtering/prioritizing logic. (The use of custom functions
+    in presets as seen in older versions is no longer supported.)
+    - NEW option `EXPANSION_THRESHOLD`: An integer. Instead of treating every new website it encounters as a
+    potential new feed, the cluster spider will only start crawling a new feed if the number of times a website
+    was seen crosses this threshold. Setting this to higher than 1 makes feeds in the resulting cluster more
+    related to each other, since they mention each other more.
+    - NEW command `python -m aggregator customizations`: a manual of supported options that can be specified in
+    a preset.
 - **v0.10.6**
     - Performance update.
     - Fixed memory leak issues with the request persistence module.

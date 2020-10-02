@@ -1,5 +1,7 @@
+DEPTH_LIMIT = 2
+
 FOLLOW_DOMAINS = {'tumblr.com'}
-FEED_STATE_SELECT = 'dead+'
+SELECT_FEED_STATE = 'dead+'
 
 
 def converter(base, match):

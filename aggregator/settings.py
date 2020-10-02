@@ -7,7 +7,7 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
-__version__ = '0.10.5'
+__version__ = '0.10.10'
 
 BOT_NAME = 'feedly'
 
@@ -78,8 +78,9 @@ DOWNLOADER_MIDDLEWARES = {
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
     'aggregator.extensions.SettingsLoader': 100,
-    'aggregator.extensions.ContribMiddleware': 101,
-    'aggregator.extensions.LogStatsExtended': 500,
+    'aggregator.extensions.LogStatsExtended': 101,
+    'aggregator.extensions.RequestMetrics': 102,
+    'aggregator.extensions.ContribMiddleware': 200,
     'aggregator.extensions.GlobalPersistence': 999,
     'aggregator.extensions.CProfile': 1000,
 }
@@ -93,6 +94,8 @@ ITEM_PIPELINES = {
 }
 
 LOGSTATS_INTERVAL = 60.0
+METRICS_CALC_INTERVAL = 20.0
+LOG_VIOLATIONS = False
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html

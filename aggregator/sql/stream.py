@@ -25,6 +25,7 @@ import sqlite3
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
+from threading import Lock
 from typing import Union
 
 from ..utils import append_stem, randstr, watch_for_timing
@@ -34,7 +35,7 @@ _PathLike = Union[str, Path]
 
 
 class DatabaseWriter:
-    def __init__(self, path: _PathLike, database: Database, buffering: int,
+    def __init__(self, path: _PathLike, database: Database,
                  debug=False, cache_path=None, silent=False):
         self.log = logging.getLogger('db.writer')
         if silent:
@@ -43,9 +44,9 @@ class DatabaseWriter:
         main_db = Path(path)
         cache_db = cache_path and Path(cache_path) or append_stem(path, f'~tmp-{randstr(8)}')
 
-        self.buffering = buffering
         self.db = database
         self._queues = {t: deque() for t in database.tablemap}
+        self._flush_lock = Lock()
 
         self._main = self._connect(main_db, 'main', debug)
         self._cache = self._connect(cache_db, 'temp', debug)
@@ -53,7 +54,6 @@ class DatabaseWriter:
 
         self._corked = True
         self._closed = False
-        self._recordcount = 0
         self._rowcounts = {conn: {t: None for t in database.tablemap}
                            for conn in (self._main, self._cache)}
 
@@ -63,7 +63,8 @@ class DatabaseWriter:
         self.flush()
 
     def _connect(self, path: _PathLike, name=None, debug=False):
-        conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+        conn = sqlite3.connect(path, isolation_level=None, timeout=30,
+                               check_same_thread=False)
         conn.row_factory = sqlite3.Row
         if debug:
             self._setup_debug(conn, name, debug)
@@ -71,8 +72,11 @@ class DatabaseWriter:
         self.db.verify_version(conn)
         self.db.set_version(conn)
         self.db.create_all(conn)
-        self.db.create_indices(conn)
         return conn
+
+    @property
+    def record_count(self):
+        return sum(len(q) for q in self._queues.values())
 
     def _lock_db(self, conn: sqlite3.Connection):
         self.log.debug(f'Locking database {self._paths[conn]}')
@@ -134,20 +138,24 @@ class DatabaseWriter:
                 return
 
     def _apply_changes(self):
+        queues = self._queues
+        self._queues = {t: deque() for t in self.db.tablemap}
         cache = self._cache
         for name, table in self.db.tablemap.items():
-            q = self._queues[name]
+            q = queues[name]
             if not q:
                 continue
+
             try:
                 table.insert(cache, q)
             except sqlite3.IntegrityError:
                 cache.rollback()
+                for k, v in queues.items():
+                    self._queues[k].appendleft(v)
                 raise
             else:
                 cache.commit()
-                self._recordcount -= len(q)
-                q.clear()
+                del queues[name]
 
     def _verify(self, conn: sqlite3.Connection):
         for table in self.db.tables:
@@ -155,6 +163,8 @@ class DatabaseWriter:
             table.restore_original(conn)
         self.reconcile()
         self.deduplicate()
+        for table in self.db.tables:
+            table.drop_temp_index(conn)
         self._rebuild_index(conn)
         self._foreign_key_on(conn)
         self._optimize(conn)
@@ -164,7 +174,7 @@ class DatabaseWriter:
         self.log.debug(f'Optimizing {self._paths[conn]}')
         conn.execute('PRAGMA optimize')
 
-    def _merge_other(self, other=None):
+    def _merge_other(self, other=None, discard=False):
         main = self._main
         if not other:
             other_db = self._cache
@@ -216,10 +226,11 @@ class DatabaseWriter:
             self.log.debug('Finalizing merge')
 
         finally:
-            self.log.debug('Removing transcient data')
-            with watch_for_timing('Restoring'):
-                for table in self.db.tables:
-                    table.restore_original(other_db)
+            if not discard:
+                self.log.debug('Removing transcient data')
+                with watch_for_timing('Restoring'):
+                    for table in self.db.tables:
+                        table.restore_original(other_db)
             self._rebuild_index(main)
             self._unlock_db(main)
 
@@ -245,27 +256,30 @@ class DatabaseWriter:
 
     def write(self, table, item):
         self._queues[table].append(item)
-        self._recordcount += 1
-        if self.buffering and self._recordcount >= self.buffering:
-            self.flush()
 
     def flush(self):
-        if self._corked:
-            return
-        if self._recordcount:
-            self.log.info(f'Saving {self._recordcount} records')
-            with watch_for_timing('Flushing'):
-                self._apply_changes()
-        self._cache.commit()
-        self._begin(self._cache)
+        with self._flush_lock:
+            if self._corked:
+                return
+
+            count = self.record_count
+            if count:
+                self.log.info(f'Saving {count} records')
+                with watch_for_timing('Flushing'):
+                    self._apply_changes()
+
+            self._cache.commit()
+            self._begin(self._cache)
 
     def deduplicate(self):
-        cache = self._cache
         self.log.info('Deduplicating database records')
+        cache = self._cache
+        cache.commit()
+        self._begin_exclusive(cache)
         try:
             with watch_for_timing('Deduplicating'):
                 for table in self.db.tables:
-                    table.dedup(cache)
+                    table.fast_dedup(cache)
         except sqlite3.IntegrityError:
             cache.rollback()
             raise
@@ -273,8 +287,10 @@ class DatabaseWriter:
             cache.commit()
 
     def reconcile(self):
-        cache = self._cache
         self.log.info('Enforcing internal references')
+        cache = self._cache
+        cache.commit()
+        self._begin_exclusive(cache)
         try:
             with watch_for_timing('Fixing foreign keys'):
                 mismatches = cache.execute('PRAGMA foreign_key_check')
@@ -289,7 +305,7 @@ class DatabaseWriter:
     def merge(self):
         self.cork()
         self.log.info('Merging new data into main database')
-        self._merge_other()
+        self._merge_other(discard=True)
         self.report()
 
     def close(self):

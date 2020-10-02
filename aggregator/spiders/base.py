@@ -35,7 +35,8 @@ from scrapy.http import Request, TextResponse
 from scrapy.signals import spider_opened
 
 from ..feedly import FeedlyEntry, build_api_url, get_feed_uri
-from ..requests import ProbeFeed, RequestFinished, ResumeRequest
+from ..requests import ProbeFeed
+from ..signals import request_finished, resume_requests, show_stats
 from ..urlkit import build_urls, select_templates
 from ..utils import LOG_LISTENER, JSONDict
 from ..utils import colored as _
@@ -70,13 +71,15 @@ class FeedlyRSSSpider(Spider, ABC):
         'alive+': {None: 1, True: -128, False: 1},
         'all': {None: 1, True: 1, False: 1},
     }
-    LOGSTATS_ITEMS = ['rss/page_count']
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider: FeedlyRSSSpider = super().from_crawler(crawler, *args, config=crawler.settings, **kwargs)
         spider.stats = crawler.stats
+        spider.signals = crawler.signals
         crawler.signals.connect(spider.open_spider, spider_opened)
+        crawler.signals.connect(spider.resume_crawl, resume_requests)
+        crawler.signals.send_catch_log(show_stats, names=['rss/page_count'])
         return spider
 
     def __init__(self, *, name=None, config, **kwargs):
@@ -92,6 +95,7 @@ class FeedlyRSSSpider(Spider, ABC):
             'unreadOnly': 'false',
         }
         self.config = config
+        self.freezer = None
         self.resume_iter = None
 
     def open_spider(self, spider):
@@ -100,12 +104,12 @@ class FeedlyRSSSpider(Spider, ABC):
 
     @abstractmethod
     def start_requests(self):
-        yield ResumeRequest(callback=self.resume_crawl)
+        self.signals.send_catch_log(resume_requests, spider=self)
+        yield from self.resume_crawl()
 
-    def resume_crawl(self, response):
+    def resume_crawl(self):
+        freezer = self.freezer
         may_resume = False
-        meta = response.meta
-        freezer = meta.get('freezer', None)
         if freezer is not None:
             requests = freezer.defrost(self)
             try:
@@ -168,13 +172,13 @@ class FeedlyRSSSpider(Spider, ABC):
         prefix = self.config['STREAM_ID_PREFIX']
         meta = kwargs.pop('meta', {})
         meta['try_feeds'] = {f'{prefix}{u}': None for u in urls}
-        meta['feed_url'] = query
         return ProbeFeed(url=query, callback=self.start_feeds, meta=meta, source=source, **kwargs)
 
     def start_feeds(self, response: TextResponse):
         meta = response.meta
-        yield RequestFinished(meta={**meta})
+        self.signals.send_catch_log(request_finished, request=response.request.copy())
 
+        del meta['is_probe']
         feeds = meta.get('valid_feeds')
         if feeds is None:
             feeds = meta.get('try_feeds', {})
@@ -210,7 +214,6 @@ class FeedlyRSSSpider(Spider, ABC):
         meta['feed_url'] = feed_url
 
         meta['pkey'] = (feed_url, 'main')
-        meta['_persist'] = 'add'
 
         params = {}
         cont = data.get('continuation')
@@ -218,8 +221,9 @@ class FeedlyRSSSpider(Spider, ABC):
             params['continuation'] = cont
             meta['reason'] = 'continuation'
         elif not initial:
-            meta['_persist'] = 'remove'
-            return RequestFinished(meta=meta)
+            self.logger.info(f'Exhausted: {feed_url}')
+            self.signals.send_catch_log(request_finished, request=response.request.copy())
+            return
 
         depth = meta.get('depth')
         reason = meta.get('reason')
@@ -259,4 +263,6 @@ class FeedlyRSSSpider(Spider, ABC):
                 'time_crawled': time.time(),
             }
 
-        yield self.next_page(data, response=response)
+        next_page = self.next_page(data, response=response)
+        if next_page:
+            yield next_page

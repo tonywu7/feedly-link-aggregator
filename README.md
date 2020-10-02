@@ -34,14 +34,14 @@ Install dependencies:
 Then start crawling:
 
 ```bash
-> scrapy crawl feed -s feed='<url>' -s output='<dir>'
+> scrapy crawl feed -s rss='<url>' -s output='<dir>'
 ```
 
 where `<url>` is the URL to your RSS feed, and `<dir>` is the directory where scraped data and temporary files will be saved.
 For example,
 
 ```bash
-> scrapy crawl feed -s feed="https://xkcd.com/atom.xml" -s output=instance/xkcd/
+> scrapy crawl feed -s rss="https://xkcd.com/atom.xml" -s output=instance/xkcd/
 ```
 
 After it's finished, run the following to list all external links found in webpage data provided by Feedly:
@@ -57,7 +57,7 @@ where `<dir>` is the same directory.
 ### Crawling
 
 ```bash
-> scrapy crawl <spider> -s feed='<url>' -s output='<dir>' [-s additional options...]
+> scrapy crawl <spider> -s rss='<url>' -s output='<dir>' [-s additional options...]
 ```
 
 Currently available spiders are `feed` and `cluster`. `feed` crawls a single feed; [`cluster`](#cluster-spider) begins with a single feed
@@ -208,15 +208,15 @@ then it will start crawling that website too.
 
 How many sites the spider can crawl will depend on whether it can find out a valid RSS feed URL from just a domain name. There are 2 ways to make it possible:
 - Provide feed templates via a preset file. For example, knowing that WordPress sites provide RSS feeds through
-[fixed endpoints such as `/?feed=rss` and `/feed/`](https://wordpress.org/support/article/wordpress-feeds/#finding-your-feed-url)
+[fixed endpoints such as `/?rss=rss` and `/feed/`](https://wordpress.org/support/article/wordpress-feeds/#finding-your-feed-url)
 you can define your templates like such:
 
     ```python
     RSS_TEMPLATES = {
         r'.*\.wordpress\.com.*': {  # will match *.wordpress.com
-            'http://%(netloc)s/?feed=rss': 100,  # number denotes precedence 
-            'http://%(netloc)s/?feed=rss2': 200,
-            'http://%(netloc)s/?feed=atom': 300,
+            'http://%(netloc)s/?rss=rss': 100,  # number denotes precedence 
+            'http://%(netloc)s/?rss=rss2': 200,
+            'http://%(netloc)s/?rss=atom': 300,
             'http://%(netloc)s/feed/': 400,
             'http://%(netloc)s/feed/rdf/': 500,
             ...

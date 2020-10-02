@@ -43,7 +43,7 @@ Version = pkg_resources.parse_version
 def check(db_path, debug=False):
     log = logging.getLogger('db.check')
     try:
-        writer = DatabaseWriter(db_path, db, 0, debug=debug, cache_path=':memory:')
+        writer = DatabaseWriter(db_path, db, debug=debug, cache_path=':memory:')
         writer._verify(writer._main)
         writer.close()
         log.info(_('Database is OK.', color='green'))
@@ -71,13 +71,13 @@ def merge(output, *db_paths, debug=False):
     initial = db_paths[0]
     log.info(_(f'Copying initial database {initial}', color='cyan'))
     shutil.copyfile(initial, output)
-    out = DatabaseWriter(output, db, debug=debug, buffering=0, cache_path=':memory:')
+    out = DatabaseWriter(output, db, debug=debug, cache_path=':memory:')
     for path in db_paths[1:]:
         log.info(_(f'Copying database {path}', color='cyan'))
         cp = output.with_name(randstr(8) + '.db')
         shutil.copyfile(path, cp)
         log.info(_(f'Merging {path}', color='cyan'))
-        out._merge_other(cp)
+        out._merge_other(other=cp)
         cp.unlink()
         cp.with_suffix('.db-shm').unlink()
         cp.with_suffix('.db-wal').unlink()
@@ -153,7 +153,8 @@ def leftovers(wd, debug=False):
         if tmp_pattern.match(temp):
             temp = main.with_name(temp)
             log.info(f'Found unmerged temp database {temp}')
-            writer = DatabaseWriter(main, db, 0, debug=debug, cache_path=temp)
+            writer = DatabaseWriter(main, db, debug=debug, cache_path=temp)
             writer.merge()
             writer.close()
             writer.cleanup()
+    log.info(_('All temporary databases have been merged.', color='green'))
