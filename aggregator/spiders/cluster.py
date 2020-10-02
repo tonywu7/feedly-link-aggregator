@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import logging
+from collections import defaultdict
 from urllib.parse import urlsplit
 
 from scrapy.crawler import Crawler
@@ -30,7 +31,7 @@ from scrapy.http import Request, TextResponse
 from ..datastructures import compose_mappings
 from ..docs import OptionsContributor
 from ..feedly import FeedlyEntry
-from ..requests import RequestFinished
+from ..signals import register_state, request_finished, show_stats
 from ..utils import SpiderOutput
 from ..utils import colored as _
 from .base import FeedlyRSSSpider
@@ -39,6 +40,13 @@ from .base import FeedlyRSSSpider
 class ExplorationSpiderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
+        crawler.signals.send_catch_log(show_stats, names=[
+            'rss/hyperlink_count',
+            'cluster/1_discovered_nodes',
+            'cluster/2_scheduled_nodes',
+            'cluster/3_finished_nodes',
+            'cluster/4_explored',
+        ])
         return cls(crawler)
 
     def __init__(self, crawler: Crawler):
@@ -47,15 +55,21 @@ class ExplorationSpiderMiddleware:
 
         self.stats = crawler.stats
         self.logger = logging.getLogger('explore')
-        self._discovered = set()
+        self._depth_limit = crawler.settings.getint('DEPTH_LIMIT', 1)
+        self._threshold = crawler.settings.getint('EXPANSION_THRESHOLD', 0)
+        self._discovered = defaultdict(int)
+        self._scheduled = set()
         self._finished = set()
+
+        crawler.signals.connect(self.update_finished, request_finished)
+        crawler.signals.send_catch_log(
+            register_state, obj=self, namespace='explore',
+            attrs=['_discovered', '_scheduled', '_finished'],
+        )
 
     def process_spider_output(self, response: TextResponse, result: SpiderOutput, spider):
         depth = response.meta.get('depth', 0)
-        self.stats.max_value('cluster/5_maxdepth', depth)
         for data in result:
-            if isinstance(data, RequestFinished):
-                self.update_finished(data)
             if isinstance(data, Request):
                 yield data
                 continue
@@ -74,14 +88,24 @@ class ExplorationSpiderMiddleware:
         dest = {k: v for k, v in dest.items() if k.netloc}
         self.stats.inc_value('rss/hyperlink_count', len(dest))
 
-        sites = {f'{u.scheme}://{u.netloc}' for u in dest} - self._discovered
-        self._discovered |= sites
+        for u in dest:
+            self._discovered[f'{u.scheme}://{u.netloc}'] += 1
+
+        if depth < self._depth_limit:
+            yield from self.schedule_new_nodes(item, depth, response.request, spider)
+
+        self.update_ratio()
+
+    def schedule_new_nodes(self, item, depth, request, spider):
+        sites = ({u for u, v in self._discovered.items() if v > self._threshold}
+                 - self._scheduled)
+        self._scheduled |= sites
         self.logger.debug(f'depth={depth}; +{len(sites)}')
 
         for url in sites:
             self.logger.debug(f'{url} (depth={depth})')
             yield spider.probe_feed(
-                url, source=response.request,
+                url, source=request,
                 meta={
                     'inc_depth': 1,
                     'depth': depth,
@@ -89,13 +113,9 @@ class ExplorationSpiderMiddleware:
                     'source_item': item,
                 })
 
-        self.stats.set_value('cluster/1_discovered_nodes', len(self._discovered))
-        depth_limit = spider.config.getint('DEPTH_LIMIT')
-        if depth_limit and depth < depth_limit or not depth_limit:
-            self.stats.inc_value('cluster/2_scheduled_nodes', len(sites))
-        self.update_ratio()
-
     def update_finished(self, request: Request):
+        if 'is_probe' in request.meta:
+            return
         feed_url = request.meta.get('feed_url')
         if not feed_url:
             return
@@ -104,8 +124,10 @@ class ExplorationSpiderMiddleware:
         self.update_ratio()
 
     def update_ratio(self):
+        scheduled = len(self._scheduled)
+        self.stats.set_value('cluster/1_discovered_nodes', len(self._discovered))
+        self.stats.set_value('cluster/2_scheduled_nodes', scheduled)
         finished = self.stats.get_value('cluster/3_finished_nodes', 0)
-        scheduled = self.stats.get_value('cluster/2_scheduled_nodes', 1)
         if not scheduled:
             return
         ratio = finished / scheduled
@@ -134,16 +156,6 @@ class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
         'SCHEDULER_MEMORY_QUEUE': 'scrapy.squeues.FifoMemoryQueue',
     })
 
-    LOGSTATS_ITEMS = [
-        *FeedlyRSSSpider.LOGSTATS_ITEMS,
-        'rss/hyperlink_count',
-        'cluster/1_discovered_nodes',
-        'cluster/2_scheduled_nodes',
-        'cluster/3_finished_nodes',
-        'cluster/4_explored',
-        'cluster/5_maxdepth',
-    ]
-
     class SpiderConfig(FeedlyRSSSpider.SpiderConfig):
         FOLLOW_DOMAINS = None
         DEPTH_LIMIT = 1
@@ -157,7 +169,7 @@ class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
                 yield self.next_page({'id': feed}, meta=meta, initial=True)
             return
 
-        select = self.config.get('FEED_STATE_SELECT', 'all')
+        select = self.config.get('SELECT_FEED_STATE', 'all')
         for feed, dead in feeds.items():
             prio = self.SELECTION_STRATS[select][dead]
             if not prio:
@@ -168,6 +180,11 @@ class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
     @staticmethod
     def _help_options():
         return {
+            'EXPANSION_THRESHOLD': """
+            Number of times a website must be mentioned by a feed before it will be scheduled.
+
+            Set to a number > 1 to filter out sites that are only mentioned a few times.
+            """,
             'FOLLOW_DOMAINS': """
             Only nodes whose domains or parent domains are included here will be expanded upon.
 
@@ -177,6 +194,7 @@ class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
             If set to None, spider will not filter nodes based on domains.
 
             **Example**
+
                 `FOLLOW_DOMAINS = ['tumblr.com', 'wordpress.com']`
             """,
             'DEPTH_LIMIT': """
@@ -190,7 +208,7 @@ class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):
             If set to ~1~, only the starting feed will be crawled.
             If set to ~0~ or ~None~, spider will keep crawling until manually stopped.
             """,
-            'FEED_STATE_SELECT': """
+            'SELECT_FEED_STATE': """
             Only crawl feeds that are of a certain `state`.
 
             A feed can be in one of two states:

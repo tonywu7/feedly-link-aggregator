@@ -47,10 +47,11 @@ def no_op(*args, **kwargs):
 class Database:
     def __init__(self, descriptor):
         models = descriptor['models']
+        creates = descriptor['tables']
         for model in models.values():
             for opt in model:
                 model[opt] = TRANSFORM[opt](model[opt])
-        self.tables = [Table(name, models) for name in descriptor['order']]
+        self.tables = [Table(name, models, creates) for name in descriptor['order']]
         Table.associate(*self.tables)
 
         self.tablemap = {t.name: t for t in self.tables}
@@ -65,6 +66,9 @@ class Database:
     def create_all(self, conn: sqlite3.Connection):
         for stmt in self.descriptor['init']:
             conn.execute(stmt)
+        create = self.descriptor['tables']
+        for table in self.descriptor['order']:
+            conn.execute(create[table])
 
     def create_indices(self, conn: sqlite3.Connection):
         for stmt in self.descriptor['indices'].values():
@@ -124,8 +128,9 @@ class Database:
 
 
 class Table:
-    def __init__(self, name, models):
+    def __init__(self, name, models, creates):
         self.name = name
+        self.create_stmt = creates[name]
         self.model = model = models[name]
         self.info = model[INFO]
         self.columns = columns = model[COLUMNS]
@@ -197,13 +202,29 @@ class Table:
     def _build_dedup(self):
         if not self.signature:
             self.dedup = no_op
+            self.fast_dedup = no_op
             return
 
         keys = ', '.join(self.signature)
         func = self.info.get('dedup', 'min')
         comp = '<=' if func == 'max' else '>'
+
+        select = f'SELECT {func}(rowid) FROM {self.name} GROUP BY {keys}'
         delete = (f'DELETE FROM {self.name} WHERE %s rowid NOT IN '
-                  f'(SELECT {func}(rowid) FROM {self.name} GROUP BY {keys})')
+                  f'({select})')
+
+        columns = list(self.columns)
+        for i in range(len(columns)):
+            if columns[i] == self.rowid:
+                columns[i] = f'{func}({self.rowid}) AS {self.rowid}'
+                break
+        columns = ', '.join(columns)
+
+        alter = f'ALTER TABLE {self.name} RENAME TO temp_dedup'
+        insert = (f'INSERT INTO {self.name} ({", ".join(self.columns)}) '
+                  f'SELECT {columns} AS {self.rowid} '
+                  f'FROM temp_dedup GROUP BY {keys}')
+        drop = 'DROP TABLE temp_dedup'
 
         def do_dedup(conn, offset=0, delete=delete):
             if offset:
@@ -211,7 +232,17 @@ class Table:
             else:
                 delete = delete % ''
             conn.execute(delete)
+
+        def do_dedup_fast(conn):
+            if len(self.primary_key) > 1 or self.primary_key[0] != self.rowid:
+                return do_dedup(conn)
+            conn.execute(alter)
+            conn.execute(self.create_stmt)
+            conn.execute(insert)
+            conn.execute(drop)
+
         self.dedup = do_dedup
+        self.fast_dedup = do_dedup_fast
 
     def _build_update_foreign_key(self, others):
         if not self.foreign_keys:
@@ -233,18 +264,34 @@ class Table:
                 raise NotImplementedError
             remote_signature = f'{remote_table}.{remote_signature[0]}'
 
-            subquery = (
+            select_referred = (
+                f'SELECT {local} FROM {self.name} '
+                f'WHERE {self.name}.rowid = ?'
+            )
+            select_key = (
                 f'SELECT {remote} FROM {remote_table} '
-                f'WHERE {remote_signature} == {local}'
+                f'WHERE {remote_signature} == ?'
             )
             update = (
                 f'UPDATE {self.name} '
-                f'SET {local_column} = ({subquery}) '
+                f'SET {local_column} = ? '
+                f'WHERE {self.name}.rowid == ?'
+            )
+            delete = (
+                f'DELETE FROM {self.name} '
                 f'WHERE {self.name}.rowid == ?'
             )
 
-            def do_update(conn, rowid, update=update):
-                conn.execute(update, (rowid,))
+            def do_update(conn, rowid, update=update, delete=delete,
+                          select1=select_referred, select2=select_key):
+                try:
+                    referred = conn.execute(select1, (rowid,))
+                    referred = referred.fetchone()[0]
+                    key = conn.execute(select2, (referred,))
+                    key = key.fetchone()[0]
+                    conn.execute(update, (key, rowid))
+                except sqlite3.IntegrityError:
+                    conn.execute(delete, (rowid,))
 
             update_funcs[local_column] = do_update
 
@@ -261,6 +308,7 @@ class Table:
         if not self.foreign_keys:
             self.create_proxy = no_op
             self.drop_proxy = no_op
+            self.drop_temp_index = no_op
             return
 
         view_name = f'proxy_{self.name}'
@@ -321,10 +369,12 @@ class Table:
                 conn.execute(create_index)
 
         def drop(conn):
-            for _, drop_index in indices:
-                conn.execute(drop_index)
             conn.execute(drop_trigger)
             conn.execute(drop_view)
+
+        def drop2(conn):
+            for _, drop_index in indices:
+                conn.execute(drop_index)
 
         name = self.name
         self.name = view_name
@@ -333,6 +383,7 @@ class Table:
 
         self.create_proxy = create
         self.drop_proxy = drop
+        self.drop_temp_index = drop2
 
     def _build_merge(self):
         columns = self.columns if not self.foreign_keys else self.keys

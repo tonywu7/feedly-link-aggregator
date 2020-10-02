@@ -44,7 +44,10 @@ class KeywordPrioritizer(OptionsContributor, _doc_order=-5):
     @classmethod
     def from_crawler(cls, crawler):
         instance = cls(crawler.settings)
-        crawler.signals.send_catch_log(register_state, obj=instance, attr='priorities')
+        crawler.signals.send_catch_log(
+            register_state, obj=instance,
+            namespace='kwprioritizer', attrs=['priorities'],
+        )
         return instance
 
     def __init__(self, settings):
@@ -139,6 +142,7 @@ class KeywordPrioritizer(OptionsContributor, _doc_order=-5):
             be dropped. (`inf` can be imported from `math` or specified as `float('inf')`).
 
             **Example**
+
                 `PRIORITIZED_KEYWORDS = {`
                 `    10: ['cats', 'kitties'],`
                 `    5: ['dogs', 'puppies'],`

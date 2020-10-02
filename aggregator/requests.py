@@ -23,33 +23,14 @@
 from scrapy import Request
 
 
-class DummyRequest(Request):
-    def __init__(self, *, callback=None, url=None, dont_filter=None, **kwargs):
-        callback = callback or self.callback
-        super().__init__('https://httpbin.org/status/204', callback, dont_filter=True, **kwargs)
-
-    def callback(self, _):
-        pass
-
-
-class ResumeRequest(DummyRequest):
-    def __init__(self, *, callback, url=None, meta=None, **kwargs):
-        super().__init__(callback=callback, meta={'_persist': 'release'}, **kwargs)
-
-
-class RequestFinished(DummyRequest):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.meta['_persist'] = 'remove'
-
-
 class ProbeFeed(Request):
     def __init__(self, *, url, callback, source=None, **kwargs):
         meta = kwargs.pop('meta', {})
-        meta['_persist'] = 'add'
-        meta['pkey'] = (meta['feed_url'], 'search')
+        meta['feed_url'] = url
+        meta['is_probe'] = True
+        meta['pkey'] = (url, 'search')
         super().__init__(url=url, callback=callback, meta=meta, **kwargs)
-        self.priority = source.priority - 1 if source else self.priority - 1
+        self.priority = source.priority + 5 if source else self.priority + 5
 
 
 def reconstruct_request(cls, instance, **kwargs):

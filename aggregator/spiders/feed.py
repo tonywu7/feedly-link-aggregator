@@ -96,6 +96,7 @@ class FeedSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=10):
                 ~%(1)s, %(2)s~        - Numbered groups
 
             **Example**:
+
                 `RSS_TEMPLATES = {`
                 `    r'.*': {  # This regular expression will match any strings`
                 `        'http:%(network_path)s': 997,`

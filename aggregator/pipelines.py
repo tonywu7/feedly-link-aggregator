@@ -25,6 +25,7 @@ import logging
 import signal
 import time
 from collections import deque
+from concurrent.futures.thread import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import datetime
 from logging.handlers import QueueHandler
@@ -109,16 +110,18 @@ class SQLiteExportPipeline(OptionsContributor):
     def open_spider(self, spider):
         self.output_dir: Path = spider.config['OUTPUT']
         self.db_path = self.output_dir / 'index.db'
-        buffering = spider.config.getint('DATABASE_CACHE_SIZE', 100000)
+        self.buffering = spider.config.getint('DATABASE_CACHE_SIZE', 100000)
+        self.cached = {'feed': set()}
+
         try:
             debug = spider.config.getbool('SQL_DEBUG')
         except ValueError:
             debug = spider.config.get('SQL_DEBUG')
         self.merge = not spider.config.getbool('DATABASE_NO_MERGE', False)
-        self.init_stream(debug, buffering)
+        self.init_stream(debug, self.buffering)
 
     def init_stream(self, debug, buffering):
-        self.stream = DatabaseWriter(self.db_path, db, buffering=buffering, debug=debug)
+        self.stream = DatabaseWriter(self.db_path, db, debug=debug)
 
     def close_stream(self):
         self.stream.finish(self.merge)
@@ -136,13 +139,21 @@ class SQLiteExportPipeline(OptionsContributor):
 
         src = item.url
         stream.write('url', {'url': src})
+
+        for k in item.keywords:
+            stream.write('keyword', {'keyword': k})
+            stream.write('tagging', {'url_id': src, 'keyword_id': k})
+
         for u, kws in item.hyperlinks.items():
             stream.write('url', {'url': u})
             stream.write('hyperlink', {'source_id': src, 'target_id': u, 'element': list(kws['tag'])[0]})
 
+        feeds = self.cached['feed']
         feed = item.source
-        stream.write('url', {'url': feed})
-        stream.write('feed', {'url_id': feed, 'title': '', 'dead': None})
+        if feed not in feeds:
+            stream.write('url', {'url': feed})
+            stream.write('feed', {'url_id': feed, 'title': '', 'dead': None})
+            feeds.add(feed)
 
         stream.write('item', {
             'url': src,
@@ -154,13 +165,15 @@ class SQLiteExportPipeline(OptionsContributor):
             'crawled': data['time_crawled'],
         })
 
-        for k in item.keywords:
-            stream.write('keyword', {'keyword': k})
-            stream.write('tagging', {'url_id': src, 'keyword_id': k})
-
         if item.markup:
             for k, v in item.markup.items():
                 stream.write(k, {'url_id': src, 'markup': v})
+
+        self.flush()
+
+    def flush(self):
+        if self.stream.record_count >= self.buffering:
+            self.stream.flush()
 
     def process_feed_source(self, data):
         source = data['source']
@@ -171,6 +184,7 @@ class SQLiteExportPipeline(OptionsContributor):
             'title': source['title'],
             'dead': data['dead'],
         })
+        self.cached['feed'].add(feed)
 
     def close_spider(self, spider):
         self.close_stream()
@@ -231,6 +245,8 @@ class DatabaseStorageProcess(ctx.Process):
                 pass
             else:
                 stream.write(table, item)
+            if self.stream.record_count >= self.buffering:
+                self.flush()
 
     def deplete(self):
         if self._abort > 2:
@@ -246,6 +262,10 @@ class DatabaseStorageProcess(ctx.Process):
             pass
         for table, item in leftovers:
             stream.write(table, item)
+        self.flush()
+
+    def flush(self):
+        self.dbworker.submit(self.stream.flush)
 
     def handle_sigint(self, *args, **kwargs):
         self._abort += 1
@@ -263,19 +283,21 @@ class DatabaseStorageProcess(ctx.Process):
         if self._abort > 2:
             return
         try:
+            self.dbworker.shutdown(True)
             self.stream.finish(self._merge)
         except BaseException as e:
             self.err_queue.put_nowait(e)
 
     def run(self):
         signal.signal(signal.SIGINT, self.handle_sigint)
+        self.dbworker = ThreadPoolExecutor(1, 'dbworker')
 
         self.config_logging()
         self.log.info(_('Starting database process', color='magenta'))
         self.log.info(_(f'Connected to database at {self.db_path}', color='magenta'))
 
         try:
-            self.stream = DatabaseWriter(self.db_path, db, buffering=self.buffering, debug=self.debug)
+            self.stream = DatabaseWriter(self.db_path, db, debug=self.debug)
             self.ready.set()
         except BaseException as e:
             self.closing.set()
@@ -321,7 +343,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     self.log.warn('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
-                with watch_for_len('pending records', buffer, self.maxsize / 2):
+                with watch_for_len('pending records', buffer, self.maxsize):
                     buffer.appendleft(item)
 
         def write(self, *item):
@@ -410,6 +432,9 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             return data
         self.check_error(spider)
         return super().process_item(data, spider)
+
+    def flush(self):
+        pass
 
     def close_spider(self, spider):
         self.close_stream()

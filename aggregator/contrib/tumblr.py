@@ -41,6 +41,7 @@ class TumblrFilter(OptionsContributor, _doc_order=-5):
             A list of Tumblr sites to ignore.
 
             **Example**
+
                 `TUMBLR_IGNORE = {`
                 `    'www.tumblr.com', 'staff.tumblr.com', 'tumblr.com',`
                 `    'engineering.tumblr.com', 'support.tumblr.com',`

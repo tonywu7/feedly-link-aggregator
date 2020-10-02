@@ -20,26 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import atexit
-import gzip
 import logging
-import os
-import pickle
-import shutil
-import time
-from collections import deque
-from concurrent.futures.thread import ThreadPoolExecutor
 from contextlib import suppress
-from itertools import permutations
-from pathlib import Path
-from threading import Event, Thread
 from urllib.parse import urlsplit
 
-import simplejson as json
 from scrapy.exceptions import DontCloseSpider, IgnoreRequest, NotConfigured
 from scrapy.http import Request, Response
-from scrapy.signals import (request_dropped, request_scheduled, spider_closed,
-                            spider_idle)
+from scrapy.signals import spider_idle
 from scrapy.spidermiddlewares.depth import DepthMiddleware
 from scrapy.utils.url import url_is_from_any_domain
 from twisted.internet.defer import DeferredList
@@ -47,13 +34,19 @@ from twisted.python.failure import Failure
 
 from .docs import OptionsContributor
 from .feedly import build_api_url, get_feed_uri
-from .requests import ProbeFeed, RequestFinished, reconstruct_request
+from .requests import ProbeFeed
+from .signals import request_finished, show_stats
 from .utils import colored as _
-from .utils import guard_json, is_rss_xml, sha1sum, wait
+from .utils import guard_json, is_rss_xml, wait
 
 
 class ConditionalDepthSpiderMiddleware(DepthMiddleware):
-    def __init__(self, maxdepth, stats, verbose_stats=False, prio=1):
+    @classmethod
+    def from_crawler(cls, crawler):
+        crawler.signals.send_catch_log(show_stats, names=['request_depth_max'])
+        return super().from_crawler(crawler)
+
+    def __init__(self, maxdepth, stats, verbose_stats=True, prio=1):
         super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=prio)
 
     def process_spider_output(self, response, result, spider):
@@ -79,11 +72,17 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
 class FeedProbingDownloaderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
-        return cls(crawler.settings)
+        crawler.signals.send_catch_log(show_stats, names=[
+            'feedprober/attempts',
+            'feedprober/successful',
+            'feedprober/valid_feeds',
+        ])
+        return cls(crawler)
 
-    def __init__(self, settings):
+    def __init__(self, crawler):
         self.logger = logging.getLogger('worker.prober')
-        self.test_status = settings.get('FEED_STATE_SELECT', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
+        self.test_status = crawler.settings.get('SELECT_FEED_STATE', 'all') in {'dead', 'dead+', 'alive', 'alive+'}
+        self.stats = crawler.stats
 
     async def process_request(self, request: ProbeFeed, spider):
         if not isinstance(request, ProbeFeed):
@@ -96,6 +95,7 @@ class FeedProbingDownloaderMiddleware:
         valid_feeds = []
 
         self.logger.info(_(f'Probing {query}', color='grey'))
+        self.stats.inc_value('feedprober/attempts')
 
         queries = []
         for feed_id in feeds:
@@ -126,6 +126,10 @@ class FeedProbingDownloaderMiddleware:
         if self.test_status:
             await self.probe_feed_status(valid_feeds, download, spider)
 
+        if valid_feeds:
+            self.stats.inc_value('feedprober/successful')
+            self.stats.inc_value('feedprober/valid_feeds', len(valid_feeds))
+
         meta['valid_feeds'] = valid_feeds
         meta['feed_info'] = feed_info
         del meta['try_feeds']
@@ -154,8 +158,11 @@ class FeedProbingDownloaderMiddleware:
 
         for successful, response in results:
             if isinstance(response, Failure):
-                response = response.value.response
-            if not successful:
+                if not isinstance(response.value, Request):
+                    continue
+                response = response.value
+                dead = True
+            elif not successful:
                 dead = True
             elif response.status not in {200, 206, 405}:
                 dead = True
@@ -169,225 +176,13 @@ class FeedProbingDownloaderMiddleware:
 class RequestPersistenceDownloaderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
-        instance = cls(crawler.settings)
-        instance.crawler = crawler
-        crawler.signals.connect(instance.eager_process, request_scheduled)
-        crawler.signals.connect(instance._remove_request, request_dropped)
-        crawler.signals.connect(instance._close, spider_closed)
-        return instance
+        return cls(crawler)
 
-    def __init__(self, settings):
-        self.logger = logging.getLogger('worker.request')
-        self.closing = Event()
-        self.thread = Thread(None, target=self.worker, name='RequestPersistenceThread',
-                             args=(self.closing,), daemon=True)
-        self.future = None
-
-        self._jobdir = settings['JOBDIR']
-        output = settings['OUTPUT']
-        self.archive_path = output / 'scheduled' / 'freezer'
-        self.freezer = RequestFreezer(self.archive_path)
-        self.thread.start()
-        atexit.register(self._close)
-        atexit.register(self._rmjobdir)
-
-    def worker(self, closing: Event):
-        while not closing.wait(20):
-            try:
-                self.archive()
-            except Exception as e:
-                self.logger.error(e, exc_info=True)
-        self.archive()
-
-    def archive(self):
-        self.freezer.flush()
-
-    def eager_process(self, request, spider):
-        with suppress(IgnoreRequest):
-            self.process_request(request, spider, True)
-
-    def process_request(self, request: Request, spider, idempotent=False):
-        meta = request.meta
-        action = meta.get('_persist', None)
-        if not action:
-            if request.url == 'https://httpbin.org/status/204':
-                raise ValueError
-            return
-
-        if action == 'release' and not idempotent:
-            return self._continue(meta, request, spider)
-        if action == 'add':
-            self.freezer.add(request)
-            if not idempotent:
-                del meta['_persist']
-            return
-        if action == 'remove':
-            self.freezer.remove(request)
-            raise IgnoreRequest()
+    def __init__(self, crawler):
+        self.signals = crawler.signals
 
     def process_exception(self, request: Request, exception, spider):
-        if isinstance(request, RequestFinished):
-            return
-        if isinstance(exception, IgnoreRequest):
-            return RequestFinished(meta=request.meta)
-
-    def _remove_request(self, request: Request, spider=None):
-        self.freezer.remove(request)
-
-    def _continue(self, meta, request, spider):
-        if self.archive_path.exists():
-            self.logger.info('Restoring persisted requests...')
-        del meta['_persist']
-
-        meta['freezer'] = self.freezer
-        return Response(url=request.url, request=request)
-
-    def _close(self, spider=None, reason=None):
-        if self.closing.is_set():
-            return
-        self.closing.set()
-        self.thread.join(2)
-        self.archive()
-        num_requests = len(self.freezer)
-        if num_requests:
-            self.logger.info(_(f'# of requests persisted to filesystem: {num_requests}', color='cyan'))
-
-    def _rmjobdir(self):
-        with suppress(Exception):
-            shutil.rmtree(Path(self._jobdir) / 'requests.queue')
-
-
-class RequestFreezer:
-    def __init__(self, path):
-        self.wd = Path(path)
-        self.path = self.wd / 'frozen'
-        os.makedirs(self.path, exist_ok=True)
-        self.buffer = deque()
-
-    def add(self, request):
-        key = request.meta.get('pkey')
-        if not key:
-            return
-        for_pickle = {
-            'url': request.url,
-            'method': request.method,
-            'callback': request.callback.__name__,
-            'meta': {**request.meta, '_time_pickled': time.perf_counter()},
-            'priority': request.priority,
-        }
-        self.buffer.append(('add', key, (request.__class__, for_pickle)))
-
-    def remove(self, request):
-        key = request.meta.get('pkey')
-        if not key:
-            return
-        self.buffer.append(('remove', key, None))
-
-    def flush(self):
-        shelves = {}
-        buffer = self.buffer
-        self.buffer = deque()
-        for action, key, item in buffer:
-            hash_ = sha1sum(pickle.dumps(key))
-            label = hash_[:2]
-            shelf = shelves.get(label)
-            if not shelf:
-                shelf = shelves[label] = self.open_shelf(label)
-            if action == 'add':
-                shelf[hash_] = item
-            if action == 'remove':
-                shelf.pop(hash_, None)
-        self.persist(shelves)
-        del shelves
-        del buffer
-
-    def open_shelf(self, shelf, path=None):
-        path = path or self.path / shelf
-        try:
-            with gzip.open(path) as f:
-                return pickle.load(f)
-        except Exception:
-            return {}
-
-    def persist(self, shelves, path=None):
-        path = path or self.path
-        for shelf, items in shelves.items():
-            shelf = path / shelf
-            with gzip.open(shelf, 'wb') as f:
-                pickle.dump(items, f)
-
-    def copy(self, src, dst):
-        def cp(shelf):
-            srcd = self.open_shelf(shelf, src / shelf)
-            if not srcd:
-                return
-            dstd = self.open_shelf(shelf, dst / shelf)
-            dstd.update(srcd)
-            self.persist({shelf: dstd}, dst)
-
-        with ThreadPoolExecutor(max_workers=32) as executor:
-            executor.map(cp, [i + j for i, j in self.names()])
-
-    def defrost(self, spider):
-        info = self.load_info()
-        defroster_path = self.wd / 'defrosting'
-        if defroster_path.exists():
-            self.copy(self.path, defroster_path)
-            shutil.rmtree(self.path)
-        else:
-            shutil.move(self.path, defroster_path)
-        os.makedirs(self.path)
-        self.dump_info(info)
-
-        defroster = RequestDefroster(defroster_path)
-        for cls, kwargs in defroster:
-            yield reconstruct_request(cls, spider, **kwargs)
-        shutil.rmtree(defroster_path)
-
-    def clear(self):
-        shutil.rmtree(self.path)
-        self.path.mkdir()
-
-    def load_info(self):
-        info = {}
-        with suppress(EOFError, FileNotFoundError,
-                      json.JSONDecodeError, gzip.BadGzipFile):
-            with open(self.path / 'info.json') as f:
-                return json.load(f)
-        return info
-
-    def dump_info(self, info):
-        with open(self.path / 'info.json', 'w+') as f:
-            json.dump(info, f)
-
-    def names(self):
-        return permutations('0123456789abcdef', 2)
-
-    def __len__(self):
-        length = 0
-        for i, j in self.names():
-            shelf = i + j
-            length += len(self.open_shelf(shelf))
-        return length
-
-    def iter_keys(self):
-        for i, j in self.names():
-            shelf = i + j
-            shelf = self.open_shelf(shelf)
-            yield from shelf
-
-
-class RequestDefroster(RequestFreezer):
-    def __init__(self, path):
-        self.path = Path(path)
-
-    def __iter__(self):
-        for i, j in self.names():
-            name = i + j
-            shelf = self.open_shelf(name)
-            yield from shelf.values()
-            with suppress(FileNotFoundError):
-                os.unlink(self.path / name)
+        self.signals.send_catch_log(request_finished, request=request)
 
 
 class RequestDefrosterSpiderMiddleware:

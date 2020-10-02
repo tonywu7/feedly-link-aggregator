@@ -105,6 +105,13 @@ def append_stem(path, appendage):
     return path.with_name(f'{path.stem}{appendage}').with_suffix(path.suffix)
 
 
+def fmttimedelta(td):
+    s = int(td.total_seconds())
+    h, r = divmod(s, 3600)
+    m, s = divmod(r, 60)
+    return f'{h}h {m}m {s}s'
+
+
 def randstr(length, choices='0123456789abcdef'):
     return ''.join(random.choices(choices, k=length))
 
