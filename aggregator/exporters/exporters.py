@@ -40,25 +40,39 @@ class MappingExporter(ABC):
         self.escape = escape or (lambda s: s)
         self.files = {}
         self.logger = logging.getLogger('exporter')
+        self.opened = 0
 
     @abstractmethod
     def format(self, item: JSONDict):
         return item
 
     def get_file(self, item: JSONDict):
+        if self.opened > 200:
+            for k, f in self.files.items():
+                f.close()
+            self.opened = 0
+
         filename = self.escape(self.filename % item)
         if filename[-1] == '/':
             filename = f'{filename}index{self.ext}'
         path = self.output / filename
+
+        f, new = self.open_file(path)
+        return f, path, new
+
+    def open_file(self, path):
         out = self.files.get(path)
-        if not out:
+        is_newfile = out is None
+        if not out or out.closed:
             os.makedirs(path.parent, exist_ok=True)
+            if is_newfile:
+                self.logger.info(f'New file {path}')
             self.files[path] = out = open(path, 'a+')
-            self.logger.info(f'New file {path}')
-        return out, path
+            self.opened += 1
+        return out, is_newfile
 
     def write(self, item: JSONDict):
-        out, _ = self.get_file(item)
+        out, _, _ = self.get_file(item)
         out.write(f'{self.format(item)}\n')
 
     def close(self):
@@ -93,12 +107,13 @@ class MappingJSONExporter(MappingExporter):
         return super().format(item)
 
     def write(self, item: JSONDict):
-        _, fn = self.get_file(item)
+        _, fn, _ = self.get_file(item)
         s = self.storage.setdefault(fn, {})
         s[item[self.key]] = item
 
     def close(self):
-        for k, f in self.files.items():
+        for k in self.files:
+            f, _ = self.open_file(k)
             json.dump(self.storage[k], f)
         return super().close()
 
@@ -122,13 +137,18 @@ class MappingCSVExporter(MappingExporter):
         return super().format(item)
 
     def get_file(self, item: JSONDict):
-        f, fn = super().get_file(item)
+        if len(self.writers) > 200:
+            for k in self.writers:
+                self.writers[k] = False
+
+        f, fn, new = super().get_file(item)
         if not self.fieldnames:
             self.fieldnames = tuple(item.keys())
         writer = self.writers.get(fn)
-        if not writer:
+        if not writer or not new:
             writer = self.writers[fn] = csv.DictWriter(f, self.fieldnames, extrasaction='ignore')
-            writer.writeheader()
+            if new:
+                writer.writeheader()
         return writer
 
     def write(self, item: JSONDict):

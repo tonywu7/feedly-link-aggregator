@@ -27,7 +27,7 @@ from pathlib import Path
 import igraph
 
 from ..datastructures import labeled_sequence
-from ..sql.utils import bulk_fetch
+from ..sql.utils import bulk_fetch, offset_fetch
 from .utils import with_db
 
 log = logging.getLogger('exporter.graph')
@@ -45,13 +45,15 @@ def create_hyperlink_graph(db: sqlite3.Connection):
         JOIN url AS source ON source.id == hyperlink.source_id
         JOIN url AS target ON target.id == hyperlink.target_id
         JOIN item ON hyperlink.source_id == item.url
+    WHERE
+        %(offset)s
     """
     vertices = {}
     edges = {}
     log.debug(SELECT)
 
     log.info('Reading database...')
-    for row in bulk_fetch(db.execute(SELECT), log=log):
+    for row in offset_fetch(db, SELECT, 'hyperlink', log=log):
         src = row['source']
         dst = row['target']
         vertices[src] = True
@@ -89,26 +91,18 @@ def create_domain_graph(db: sqlite3.Connection):
             domains
         GROUP BY
             domain
-    ),
-    edges AS (
-        SELECT
-            hyperlink.source_id AS source,
-            hyperlink.target_id AS target,
-            hyperlink.element AS tag
-        FROM
-            hyperlink
     )
     SELECT
         src.domain AS source,
         dst.domain AS target,
-        edges.tag AS tag,
-        count(edges.tag) AS count,
+        hyperlink.element AS tag,
+        count(hyperlink.element) AS count,
         srcw.count AS srcw,
         dstw.count AS dstw
     FROM
-        edges
-        JOIN domains AS src ON edges.source == src.id
-        JOIN domains AS dst ON edges.target == dst.id
+        hyperlink
+        JOIN domains AS src ON hyperlink.source_id == src.id
+        JOIN domains AS dst ON hyperlink.target_id == dst.id
         JOIN weight AS srcw ON src.domain == srcw.domain
         JOIN weight AS dstw ON dst.domain == dstw.domain
     GROUP BY
