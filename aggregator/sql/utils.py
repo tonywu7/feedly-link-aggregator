@@ -31,3 +31,24 @@ def bulk_fetch(cur, size=100000, log=None):
         if log:
             log.info(f'Fetched {i} rows.')
         rows = cur.fetchmany(size)
+
+
+def offset_fetch(conn, stmt, table, *, values=(), size=100000, log=None):
+    i = 0
+    offset = 0
+    while True:
+        limited = stmt % {'offset': (
+            f'{table}.rowid IN '
+            f'(SELECT rowid FROM {table} '
+            f'ORDER BY rowid LIMIT {size} OFFSET {offset})'
+        )}
+        rows = conn.execute(limited, values)
+        j = i
+        for row in rows:
+            i += 1
+            yield row
+        if log:
+            log.info(f'Fetched {i} rows.')
+        if j == i:
+            break
+        offset += size

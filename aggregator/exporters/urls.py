@@ -25,7 +25,7 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from ..sql.utils import bulk_fetch
+from ..sql.utils import offset_fetch
 from ..utils import pathsafe
 from .exporters import MappingCSVExporter, MappingLineExporter
 from .utils import build_where_clause, with_db
@@ -111,7 +111,7 @@ def export(
     if format == 'lines':
         keys = (key,) if key else ('target:url',)
     else:
-        keys = key and set(key.split(','))
+        keys = set(key.split(',')) if key else list(column_maps.keys())
 
     where, values, _ = build_where_clause(include, exclude)
 
@@ -119,7 +119,7 @@ def export(
     column_keys = ', '.join([f'"{k}"' for k in keys])
 
     select = SELECT % {'columns': columns}
-    select = f'{cte}{select} WHERE {where} GROUP BY {column_keys}'
+    select = f'{cte}{select} WHERE %(offset)s AND {where} GROUP BY {column_keys}'
     log.debug(select)
 
     escape_func = {
@@ -138,7 +138,8 @@ def export(
 
     log.info('Reading database...')
     with cls(*args) as exporter:
-        for row in bulk_fetch(conn.execute(select, values), log=log):
+        for row in offset_fetch(conn, select, 'hyperlink',
+                                values=values, log=log, size=200000):
             exporter.write(row)
     log.info('Done.')
 
