@@ -22,167 +22,116 @@
 
 import logging
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 
 import simplejson as json
 from scrapy.utils.url import url_is_from_any_domain
 
-from ..sql.utils import bulk_fetch
 from .utils import with_db
 
 log = logging.getLogger('exporter.fringe')
 
 
+def parse_filters(ls):
+    domains = []
+    for key, op, val in ls:
+        if key != 'domain' or op != 'under':
+            log.warning(f'Unknown filter {key} {op}')
+            continue
+        domains.append(val)
+    return domains
+
+
 @with_db
-def export_disabled(conn: sqlite3.Connection, wd: Path, output: Path,
-                    include=None, exclude=None,
-                    fmt='fringe.json', *args, **kwargs):
+def export(conn: sqlite3.Connection, wd: Path, output: Path,
+           include=None, exclude=None,
+           fmt='fringe.json', *args, **kwargs):
 
-    def parse_filters(ls):
-        domains = []
-        for key, op, val in ls:
-            if key != 'domain' or op != 'under':
-                log.warning(f'Unknown filter {key} {op}')
-                continue
-            domains.append(val)
-        return domains
+    temp = """
+    CREATE TEMP TABLE domains (id INTEGER, domain VARCHAR)
+    """
+    index = """
+    CREATE INDEX temp_ix_domains ON domains (id)
+    """
+    insert_domains = """
+    INSERT INTO domains
+    SELECT url.id AS id, 'http://' || urlsplit(url.url, 'netloc') AS domain
+    FROM url
+    """
+    count_domains = """
+    SELECT domains.domain, count(domains.domain)
+    FROM domains
+    GROUP BY domains.domain
+    """
+    select_feeds = """
+    SELECT domains.domain
+    FROM feed
+    JOIN domains ON feed.url_id == domains.id
+    GROUP BY domains.domain
+    """
+    select_keywords = """
+    SELECT domains.domain, keyword.keyword, count(keyword.keyword)
+    FROM tagging
+    JOIN domains ON tagging.url_id == domains.id
+    JOIN keyword ON tagging.keyword_id == keyword.id
+    GROUP BY domains.domain, keyword.keyword
+    """
+    select_hyperlinks = """
+    SELECT src.domain, dst.domain, count(src.domain)
+    FROM hyperlink
+    JOIN domains AS src ON hyperlink.source_id == src.id
+    JOIN domains AS dst ON hyperlink.target_id == dst.id
+    GROUP BY src.domain, dst.domain
+    """
 
-    tests = []
+    conn.execute('BEGIN EXCLUSIVE')
+    conn.execute(temp)
+
+    log.info('Building domain list')
+    conn.execute(insert_domains)
+    conn.execute(index)
+
+    domains = defaultdict(lambda: {
+        'page_count': 0,
+        'keywords': defaultdict(int),
+        'referrers': defaultdict(int),
+    })
+    log.info('Counting domains')
+    for domain, count in conn.execute(count_domains):
+        domains[domain]['page_count'] = count
+
+    log.info('Counting keywords')
+    for domain, keyword, count in conn.execute(select_keywords):
+        domains[domain]['keywords'][keyword] += count
+
+    log.info('Counting referrers')
+    for src, dst, count in conn.execute(select_hyperlinks):
+        domains[dst]['referrers'][src] += count
+
+    log.info('Filtering')
+    for feed in conn.execute(select_feeds):
+        del domains[feed[0]]
+
     if include:
         includes = parse_filters(include)
-        if includes:
-            tests.append(lambda u: url_is_from_any_domain(u, includes))
+        domains = {k: v for k, v in domains.items()
+                   if url_is_from_any_domain(k, includes)}
+
     if exclude:
         excludes = parse_filters(exclude)
-        if excludes:
-            tests.append(lambda u: not url_is_from_any_domain(u, excludes))
+        domains = {k: v for k, v in domains.items()
+                   if not url_is_from_any_domain(k, excludes)}
 
-    conn.execute('BEGIN')
-    conn.executescript(
-        """
-        CREATE TEMP TABLE domains (id INTEGER, domain VARCHAR);
-
-        CREATE TEMP TABLE indegrees (
-            srcd VARCHAR,
-            dstd VARCHAR,
-            indegree INTEGER
-        );
-
-        CREATE INDEX ixd ON domains (id, domain);
-
-        CREATE INDEX ixdg ON indegrees (dstd);
-
-        INSERT INTO
-            domains (id, domain)
-        SELECT
-            url.id AS id,
-            urlsplit(url.url, 'netloc') AS domain
-        FROM
-            url;
-
-        INSERT INTO
-            indegrees (srcd, dstd, indegree)
-        SELECT
-            srcd.domain AS srcd,
-            dstd.domain AS dstd,
-            count(distinct srcd.domain) AS indegree
-        FROM
-            hyperlink
-            JOIN domains AS srcd ON hyperlink.source_id == srcd.id
-            JOIN domains AS dstd ON hyperlink.target_id == dstd.id
-        GROUP BY
-            dstd;
-        """,
-    )
-
-    indegrees = (
-        """
-        WITH weights AS (
-            SELECT
-                domains.domain AS domain,
-                count(domains.domain) AS weight
-            FROM
-                domains
-            GROUP BY
-                domain
-        )
-        SELECT
-            indegrees.srcd AS source,
-            indegrees.dstd AS target,
-            indegrees.indegree AS indegree,
-            weights.weight AS weight
-        FROM
-            indegrees
-            JOIN weights ON indegrees.dstd == weights.domain
-        WHERE
-            indegrees.indegree == 1
-        """
-    )
-
-    keywords = (
-        """
-        SELECT
-            indegrees.dstd AS domain,
-            keyword.keyword AS keyword,
-            count(keyword.keyword) AS numkw
-        FROM
-            indegrees
-            JOIN domains ON indegrees.dstd == domains.domain
-            JOIN tagging ON domains.id == tagging.url_id
-            JOIN keyword ON tagging.keyword_id == keyword.id
-        WHERE
-            indegrees.indegree == 1
-        GROUP BY
-            domain, keyword
-        """
-    )
-
-    tags = (
-        """
-        SELECT
-            indegrees.dstd AS domain,
-            hyperlink.element AS tag,
-            count(hyperlink.element) AS numtag
-        FROM
-            hyperlink
-            JOIN domains ON hyperlink.source_id == domains.id
-            JOIN indegrees ON domains.domain == indegrees.dstd
-        WHERE
-            indegrees.indegree == 1
-        GROUP BY
-            domain,
-            tag
-        """
-    )
-
-    sites = {}
-
-    log.info('Calculating indegrees...')
-    for r in bulk_fetch(conn.execute(indegrees), log=log):
-        info = sites[r['target']] = {}
-        info['referrer'] = r['source']
-        info['weight'] = r['weight']
-        info['keywords'] = {}
-        info['tags'] = {}
-
-    log.info('Getting keyword info...')
-    for r in bulk_fetch(conn.execute(keywords), log=log):
-        sites[r['domain']]['keywords'][r['keyword']] = r['numkw']
-
-    log.info('Getting HTML tag info...')
-    for r in bulk_fetch(conn.execute(tags), log=log):
-        sites[r['domain']]['tags'][r['tag']] = r['numtag']
-
-    sites = {f'http://{k}': v for k, v in sites.items()
-             if all(t(f'http://{k}') for t in tests)}
     with open(output / fmt, 'w+') as f:
-        json.dump(sites, f)
+        json.dump(domains, f)
 
     conn.rollback()
+    log.info('Done.')
 
 
 help_text = """
-Export a list of websites that are on the fringe in a feed network.
+Export a list of websites that are on the fringe in a cluster of feed.
 
 That is, if you are using the cluster spider, this exporter will export the list
 of websites that are not crawled due to the spider hitting the depth limit
