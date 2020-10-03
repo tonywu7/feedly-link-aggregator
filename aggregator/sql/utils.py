@@ -36,19 +36,17 @@ def bulk_fetch(cur, size=100000, log=None):
 def offset_fetch(conn, stmt, table, *, values=(), size=100000, log=None):
     i = 0
     offset = 0
-    while True:
+    max_id = conn.execute(f'SELECT max(rowid) FROM {table}').fetchone()[0]
+    while offset <= max_id:
         limited = stmt % {'offset': (
             f'{table}.rowid IN '
             f'(SELECT rowid FROM {table} '
             f'ORDER BY rowid LIMIT {size} OFFSET {offset})'
         )}
         rows = conn.execute(limited, values)
-        j = i
         for row in rows:
             i += 1
             yield row
-        if log:
+        if log and i:
             log.info(f'Fetched {i} rows.')
-        if j == i:
-            break
         offset += size
