@@ -84,6 +84,8 @@ class FeedlyRSSSpider(Spider, ABC):
 
     def __init__(self, *, name=None, config, **kwargs):
         super().__init__(name=name, **kwargs)
+        self.config = config
+        self.item_limit = config.getint('DOWNLOAD_LIMIT', 0)
 
         output_dir = config['OUTPUT']
         os.makedirs(output_dir, exist_ok=True)
@@ -94,7 +96,7 @@ class FeedlyRSSSpider(Spider, ABC):
             'similar': 'true',
             'unreadOnly': 'false',
         }
-        self.config = config
+
         self.freezer = None
         self.resume_iter = None
 
@@ -247,21 +249,27 @@ class FeedlyRSSSpider(Spider, ABC):
             if response.meta.get('reason') != 'continuation':
                 self.logger.info(_(f'Got new feed: {source}', color='green'))
 
+        count = response.meta.get('item_scraped', 0)
         for item in items:
             entry = FeedlyEntry.from_upstream(item)
             if not entry.source:
                 entry.source = {'feed': source}
             if not entry:
                 continue
+
             self.stats.inc_value('rss/page_count')
 
             depth = response.meta.get('depth', 0)
-
             yield {
                 'item': entry,
                 'depth': depth,
                 'time_crawled': time.time(),
             }
+            count += 1
+        response.meta['item_craped'] = count
+
+        if self.item_limit and count > self.item_limit:
+            return
 
         next_page = self.next_page(data, response=response)
         if next_page:

@@ -150,8 +150,8 @@ class FeedProbingDownloaderMiddleware:
             requests.append(download(Request(
                 get_feed_uri(feed), method='HEAD', meta={
                     'url': feed,
-                    'max_retry_times': 2,
-                    'download_timeout': 10,
+                    'max_retry_times': 0,
+                    'download_timeout': 20,
                 }), spider))
 
         results = await DeferredList(requests, consumeErrors=True)

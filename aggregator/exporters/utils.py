@@ -27,6 +27,8 @@ import sqlite3
 from functools import wraps
 from pathlib import Path
 
+from scrapy.utils.url import url_is_from_any_domain
+
 from ..datastructures import labeled_sequence
 from ..sql.db import db
 from ..sql.functions import register_all
@@ -129,3 +131,13 @@ def with_db(exporter):
         finally:
             conn.close()
     return e
+
+
+def filter_by_domains(ls, exclude=False):
+    domains = []
+    for key, op, val in ls:
+        if key != 'domain' or op != 'under':
+            log.warning(f'Unknown filter {key} {op}')
+            continue
+        domains.append(val)
+    return lambda u: url_is_from_any_domain(u, domains) ^ exclude
