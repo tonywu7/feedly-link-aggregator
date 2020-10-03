@@ -29,7 +29,7 @@ from scrapy.exceptions import NotConfigured
 
 from ..docs import OptionsContributor
 from ..requests import ProbeFeed
-from ..signals import register_state
+from ..signals import register_state, start_from_scratch
 
 
 class KeywordPrioritizer(OptionsContributor, _doc_order=-5):
@@ -48,6 +48,7 @@ class KeywordPrioritizer(OptionsContributor, _doc_order=-5):
             register_state, obj=instance,
             namespace='kwprioritizer', attrs=['priorities'],
         )
+        crawler.signals.connect(instance.clear_state_info, start_from_scratch)
         return instance
 
     def __init__(self, settings):
@@ -63,6 +64,9 @@ class KeywordPrioritizer(OptionsContributor, _doc_order=-5):
 
         self.priorities = {}
         self.starting_weight = 0
+
+    def clear_state_info(self):
+        self.priorities.clear()
 
     def update_priority(self, item, source, target):
         prios = self.priorities

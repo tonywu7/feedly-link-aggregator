@@ -31,7 +31,8 @@ from scrapy.http import Request, TextResponse
 from ..datastructures import compose_mappings
 from ..docs import OptionsContributor
 from ..feedly import FeedlyEntry
-from ..signals import register_state, request_finished, show_stats
+from ..signals import (register_state, request_finished, show_stats,
+                       start_from_scratch)
 from ..utils import SpiderOutput
 from ..utils import colored as _
 from .base import FeedlyRSSSpider
@@ -40,6 +41,9 @@ from .base import FeedlyRSSSpider
 class ExplorationSpiderMiddleware:
     @classmethod
     def from_crawler(cls, crawler):
+        if crawler.spidercls is not FeedClusterSpider:
+            raise NotConfigured()
+
         crawler.signals.send_catch_log(show_stats, names=[
             'rss/hyperlink_count',
             'cluster/1_discovered_nodes',
@@ -50,9 +54,6 @@ class ExplorationSpiderMiddleware:
         return cls(crawler)
 
     def __init__(self, crawler: Crawler):
-        if crawler.spidercls is not FeedClusterSpider:
-            raise NotConfigured()
-
         self.stats = crawler.stats
         self.logger = logging.getLogger('explore')
         self._depth_limit = crawler.settings.getint('DEPTH_LIMIT', 1)
@@ -61,6 +62,7 @@ class ExplorationSpiderMiddleware:
         self._scheduled = set()
         self._finished = set()
 
+        crawler.signals.connect(self.clear_state_info, start_from_scratch)
         crawler.signals.connect(self.update_finished, request_finished)
         crawler.signals.send_catch_log(
             register_state, obj=self, namespace='explore',
@@ -132,6 +134,11 @@ class ExplorationSpiderMiddleware:
             return
         ratio = finished / scheduled
         self.stats.set_value('cluster/4_explored', f'{ratio * 100:.2f}%')
+
+    def clear_state_info(self):
+        self._discovered.clear()
+        self._scheduled.clear()
+        self._finished.clear()
 
 
 class FeedClusterSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=9):

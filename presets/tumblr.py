@@ -28,13 +28,6 @@ TUMBLR_IGNORE = {
     'assets.tumblr.com',
 }
 
-PRIORITIZED_KEYWORDS = {
-    10: ['cats', 'kitties'],
-    5: ['dogs', 'puppies'],
-    -5: ['goldfish'],
-    -float('inf'): ['rat'],
-}
-
 CONTRIB_SPIDER_MIDDLEWARES = {
     'aggregator.contrib.filters.KeywordPrioritizer': 500,
     'aggregator.contrib.tumblr.TumblrFilter': 505,
