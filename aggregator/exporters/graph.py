@@ -22,18 +22,33 @@
 
 import logging
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 
 import igraph
 
 from ..datastructures import labeled_sequence
-from ..sql.utils import bulk_fetch, offset_fetch
-from .utils import with_db
+from ..sql.utils import offset_fetch
+from .utils import filter_by_domains, with_db
 
 log = logging.getLogger('exporter.graph')
 
 
-def create_hyperlink_graph(db: sqlite3.Connection):
+def filter_vertices(g, vertex_ids, include, exclude):
+    if include or exclude:
+        log.info('Filtering graph')
+        vertex_ids = {f'http://{k}': i for k, i in vertex_ids.items()}
+        if include:
+            vertex_ids = {k: i for k, i in vertex_ids.items()
+                          if filter_by_domains(include)(k)}
+        if exclude:
+            vertex_ids = {k: i for k, i in vertex_ids.items()
+                          if filter_by_domains(exclude, True)(k)}
+        g = g.subgraph(vertex_ids.values())
+    return g
+
+
+def create_hyperlink_graph(db: sqlite3.Connection, include=None, exclude=None):
     SELECT = """
     SELECT
         source.url AS "source",
@@ -52,16 +67,16 @@ def create_hyperlink_graph(db: sqlite3.Connection):
     edges = {}
     log.debug(SELECT)
 
-    log.info('Reading database...')
+    log.info('Reading database')
     for row in offset_fetch(db, SELECT, 'hyperlink', log=log):
         src = row['source']
         dst = row['target']
         vertices[src] = True
         vertices[dst] = True
         edges[(src, dst)] = (row['tag'], row['timestamp'])
-    log.info('Finished reading database...')
+    log.info('Finished reading database')
 
-    log.info('Creating graph...')
+    log.info('Creating graph')
     g = igraph.Graph(directed=True)
     vertex_ids = labeled_sequence(vertices, key=False)
     edges = {(vertex_ids[t[0]], vertex_ids[t[1]]): v for t, v in edges.items()}
@@ -70,64 +85,70 @@ def create_hyperlink_graph(db: sqlite3.Connection):
     g.vs['name'] = list(vertices)
     g.es['type'], g.es['timestamp'] = tuple(zip(*edges.values()))
     log.info(f'|V| = {g.vcount()}; |E| = {g.ecount()}')
+    g = filter_vertices(g, vertex_ids, include, exclude)
     return g
 
 
-def create_domain_graph(db: sqlite3.Connection):
-    SELECT = """
-    WITH domains AS (
-        SELECT
-            url.id AS id,
-            url.url AS url,
-            urlsplit(url.url, 'netloc') AS domain
-        FROM
-            url
-    ),
-    weight AS (
-        SELECT
-            domains.domain AS domain,
-            count(domains.domain) AS count
-        FROM
-            domains
-        GROUP BY
-            domain
-    )
+def create_domain_graph(db: sqlite3.Connection, include=None, exclude=None):
+    temp = """
+    CREATE TEMP TABLE domains (id INTEGER, domain VARCHAR)
+    """
+    index = """
+    CREATE INDEX temp_ix_domains ON domains (id)
+    """
+    insert_domains = """
+    INSERT INTO domains
+    SELECT url.id AS id, urlsplit(url.url, 'netloc') AS domain
+    FROM url
+    """
+    count_domains = """
+    SELECT domains.domain, count(domains.domain)
+    FROM domains
+    GROUP BY domains.domain
+    """
+
+    select_pairs = """
     SELECT
         src.domain AS source,
         dst.domain AS target,
         hyperlink.element AS tag,
-        count(hyperlink.element) AS count,
-        srcw.count AS srcw,
-        dstw.count AS dstw
+        count(hyperlink.element) AS count
     FROM
         hyperlink
         JOIN domains AS src ON hyperlink.source_id == src.id
         JOIN domains AS dst ON hyperlink.target_id == dst.id
-        JOIN weight AS srcw ON src.domain == srcw.domain
-        JOIN weight AS dstw ON dst.domain == dstw.domain
+    WHERE %(offset)s
     GROUP BY
         source,
         target,
         tag
     """
-    vertices = {}
-    edges = {}
-    attrs = set()
-    log.debug(SELECT)
+    db.execute('BEGIN EXCLUSIVE')
+    db.execute(temp)
 
-    log.info('Reading database...')
-    for row in bulk_fetch(db.execute(SELECT), log=log):
+    log.info('Building domain list')
+    db.execute(insert_domains)
+    db.execute(index)
+
+    vertices = {}
+    edges = defaultdict(lambda: defaultdict(int))
+    attrs = set()
+
+    log.info('Counting domains')
+    for domain, count in db.execute(count_domains):
+        vertices[domain] = count
+
+    log.info('Fetching hyperlinks')
+    for row in offset_fetch(db, select_pairs, 'hyperlink', size=500000, log=log):
         src = row['source']
         dst = row['target']
-        vertices[src] = row['srcw']
-        vertices[dst] = row['dstw']
         tag = row['tag']
         attrs.add(tag)
-        counts = edges.setdefault((src, dst), {})
-        counts[tag] = counts.get(tag, 0) + row['count']
-    log.info('Finished reading database...')
+        edges[(src, dst)][tag] += row['count']
 
-    log.info('Creating graph...')
+    db.rollback()
+
+    log.info('Creating graph')
     g = igraph.Graph(directed=True)
     vertex_ids = labeled_sequence(vertices, key=False)
     edges = {(vertex_ids[t[0]], vertex_ids[t[1]]): v for t, v in edges.items()}
@@ -138,18 +159,22 @@ def create_domain_graph(db: sqlite3.Connection):
     attrs = {a: tuple(v.get(a, 0) for v in edges.values()) for a in attrs}
     for k, t in attrs.items():
         g.es[k] = t
+    g = filter_vertices(g, vertex_ids, include, exclude)
     log.info(f'|V| = {g.vcount()}; |E| = {g.ecount()}')
     return g
 
 
 @with_db
-def export(conn: sqlite3.Connection, wd: Path, output: Path, fmt='index.graphml', graphtype='hyperlink', *args, **kwargs):
+def export(conn: sqlite3.Connection, wd: Path, output: Path,
+           fmt='index.graphml', graphtype='hyperlink',
+           include=None, exclude=None, *args, **kwargs):
+
     reader = {
         'hyperlink': create_hyperlink_graph,
         'domain': create_domain_graph,
     }[graphtype]
-    g = reader(conn)
-    log.info('Writing...')
+    g = reader(conn, include, exclude)
+    log.info('Writing')
     with open(output / fmt, 'w+') as f:
         g.save(f, format='graphml')
     log.info('Done.')
@@ -170,7 +195,15 @@ This exporter lets you represent scraped URL data using graph data structure.
 
 Currently this exports graphs in ~GraphML~ format only.
 
-This exporter does not support filtering or name templates.
+This exporter does not support name templates.
+
+Filters
+-------
+
+~domain~ ~under~ ...
+
+Include/exclude websites/hyperlinks whose domain name is under the specified
+domain.
 
 Options
 -------

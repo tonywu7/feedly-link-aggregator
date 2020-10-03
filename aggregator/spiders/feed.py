@@ -58,6 +58,12 @@ class FeedSpider(FeedlyRSSSpider, OptionsContributor, _doc_order=10):
             'DOWNLOAD_PER_BATCH': """
             Number of entries to download per API request. The minimum is 1 and the maximum is 1000.
             """,
+            'DOWNLOAD_LIMIT': """
+            Number of items to scrape from one RSS feed source before stopping.
+
+            Note that one website may have multiple sources e.g. if using feed templates. This number
+            applies to each source.
+            """,
             'RSS_TEMPLATES': """
             Templates to generate different versions of RSS URLs based on the value of the RSS setting.
 

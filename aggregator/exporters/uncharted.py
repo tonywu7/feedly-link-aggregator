@@ -26,21 +26,10 @@ from collections import defaultdict
 from pathlib import Path
 
 import simplejson as json
-from scrapy.utils.url import url_is_from_any_domain
 
-from .utils import with_db
+from .utils import filter_by_domains, with_db
 
 log = logging.getLogger('exporter.uncharted')
-
-
-def parse_filters(ls):
-    domains = []
-    for key, op, val in ls:
-        if key != 'domain' or op != 'under':
-            log.warning(f'Unknown filter {key} {op}')
-            continue
-        domains.append(val)
-    return domains
 
 
 @with_db
@@ -114,14 +103,12 @@ def export(conn: sqlite3.Connection, wd: Path, output: Path,
         del domains[feed[0]]
 
     if include:
-        includes = parse_filters(include)
         domains = {k: v for k, v in domains.items()
-                   if url_is_from_any_domain(k, includes)}
+                   if filter_by_domains(include)(k)}
 
     if exclude:
-        excludes = parse_filters(exclude)
         domains = {k: v for k, v in domains.items()
-                   if not url_is_from_any_domain(k, excludes)}
+                   if filter_by_domains(exclude, True)(k)}
 
     with open(output / fmt, 'w+') as f:
         json.dump(domains, f)
