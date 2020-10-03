@@ -64,22 +64,26 @@ class SettingsLoader:
         base_settings: BaseSettings = crawler.settings
         cls.normalize(base_settings)
 
-        settings = {}
+        settings = BaseSettings(priority='spider')
         cls.from_object(settings, crawler.spidercls.SpiderConfig)
-        settings.update({k: v for k, v in base_settings.items() if k in settings})
+        settings.update({k: v for k, v in base_settings.items() if k in settings},
+                        priority='cmdline')
+
         preset = base_settings.get('PRESET')
         if preset:
-            cls.from_pyfile(settings, preset)
+            preset_dict = BaseSettings(priority=35)
+            cls.from_pyfile(preset_dict, preset)
+            settings.update(preset_dict)
 
-        adapted = BaseSettings(priority='cmdline')
+        adapted = BaseSettings(priority=50)
         for k, v in settings.items():
             adapt = getattr(SettingsAdapter, k.lower(), None)
             if adapt:
-                adapted.update(adapt(v), 'cmdline')
+                adapted.update(adapt(v))
             else:
                 adapted[k] = v
 
-        base_settings.update(adapted, priority='cmdline')
+        base_settings.update(adapted.copy_to_dict(), priority=50)
         base_settings['SPIDER_CONFIG'] = adapted
         return cls()
 
@@ -455,9 +459,9 @@ class RequestMetrics:
         oldest_i, newest_i, avg_age_i = self.calc_time(self.inprogress_time)
         stats = zip(self.topics, [
             min_sprio, avg_sprio, mode_sprio, max_sprio,
-            fmttimedelta(avg_age_s), fmttimedelta(oldest_s), fmttimedelta(newest_s),
+            avg_age_s, oldest_s, newest_s,
             min_iprio, avg_iprio, mode_iprio, max_iprio,
-            fmttimedelta(avg_age_i), fmttimedelta(oldest_i), fmttimedelta(newest_i),
+            avg_age_i, oldest_i, newest_i,
         ])
         for k, v in stats:
             self.stats.set_value(k, v)
@@ -494,11 +498,16 @@ class LogStatsExtended(LogStats):
         self.history.update({k: deque(maxlen=self.window) for k in names})
 
     def _log(self, names, values, rates):
+        converters = {
+            float: lambda f: round(f, 2),
+            timedelta: fmttimedelta,
+            datetime: datetime.isoformat,
+        }
+
         for k in names:
             n = f'{k}:'.ljust(self.width)
             v = values[k]
-            if isinstance(v, float):
-                v = round(v, 2)
+            v = converters.get(type(v), lambda v: v)(v)
             if k in rates:
                 self.logger.info(f'  {n} {v} ({rates[k]:+.1f}/min)')
             else:

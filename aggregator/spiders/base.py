@@ -36,7 +36,8 @@ from scrapy.signals import spider_opened
 
 from ..feedly import FeedlyEntry, build_api_url, get_feed_uri
 from ..requests import ProbeFeed
-from ..signals import request_finished, resume_requests, show_stats
+from ..signals import (request_finished, resume_requests, show_stats,
+                       start_from_scratch)
 from ..urlkit import build_urls, select_templates
 from ..utils import LOG_LISTENER, JSONDict
 from ..utils import colored as _
@@ -124,6 +125,7 @@ class FeedlyRSSSpider(Spider, ABC):
         if not may_resume:
             feed = self.config['RSS']
             freezer.dump_info({'crawling': feed})
+            self.signals.send_catch_log(start_from_scratch)
             yield self.probe_feed(feed, meta={'reason': 'user_specified', 'depth': 1})
             return
 
