@@ -22,6 +22,7 @@
 
 import logging
 from importlib import import_module
+from pathlib import Path
 
 import click
 from scrapy.crawler import CrawlerProcess
@@ -91,6 +92,13 @@ def help_export(ctx: click.Context, param, exporter):
     ctx.exit()
 
 
+def ensure_index_db(path):
+    path = Path(path)
+    if path.is_dir():
+        return path / 'index.db'
+    return path
+
+
 @cli.command()
 @click.argument('topic', callback=export_load_exporter, default='help', metavar='topic')
 @click.option('-h', '--help', callback=help_export, is_flag=True, is_eager=True,
@@ -150,7 +158,7 @@ def run_spider(spider, preset, **kwargs):
 
 
 @cli.command()
-@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True, dir_okay=False),
+@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True),
               help='Path to the database.')
 @click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
               help='Optional file to write executed SQL statements to.')
@@ -158,11 +166,11 @@ def run_spider(spider, preset, **kwargs):
 def check_db(ctx, db_path, debug=False, **kwargs):
     """Check a database for potential problems and inconsistencies."""
 
-    ctx.exit(check(db_path, debug=debug))
+    ctx.exit(check(ensure_index_db(db_path), debug=debug))
 
 
 @cli.command()
-@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True, dir_okay=False),
+@click.option('-i', '--input', 'db_path', required=True, type=click.Path(exists=True),
               help='Path to the database.')
 @click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
               help='Optional file to write executed SQL statements to.')
@@ -170,7 +178,7 @@ def check_db(ctx, db_path, debug=False, **kwargs):
 def upgrade_db(ctx, db_path, debug=False, **kwargs):
     """Upgrade an older database to the latest schema version."""
 
-    ctx.exit(migrate(db_path, debug=debug))
+    ctx.exit(migrate(ensure_index_db(db_path), debug=debug))
 
 
 @cli.command()
