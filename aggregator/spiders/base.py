@@ -267,9 +267,9 @@ class FeedlyRSSSpider(Spider, ABC):
                 'time_crawled': time.time(),
             }
             count += 1
-        response.meta['item_craped'] = count
+        response.meta['item_scraped'] = count
 
-        if self.item_limit and count > self.item_limit:
+        if self.item_limit and count >= self.item_limit:
             return
 
         next_page = self.next_page(data, response=response)
