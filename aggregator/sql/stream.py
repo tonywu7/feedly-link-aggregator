@@ -158,17 +158,18 @@ class DatabaseWriter:
                 del queues[name]
 
     def _verify(self, conn: sqlite3.Connection):
+        self._foreign_key_off(conn)
         for table in self.db.tables:
             table.drop_proxy(conn)
             table.restore_original(conn)
-        self.reconcile()
-        self.deduplicate()
+        conn.commit()
+        self.reconcile(conn)
+        self.deduplicate(conn)
         for table in self.db.tables:
             table.drop_temp_index(conn)
         self._rebuild_index(conn)
         self._foreign_key_on(conn)
         self._optimize(conn)
-        self._unlock_db(conn)
 
     def _optimize(self, conn: sqlite3.Connection):
         self.log.debug(f'Optimizing {self._paths[conn]}')
@@ -252,6 +253,7 @@ class DatabaseWriter:
         self.flush()
         conn = self._cache
         self._verify(conn)
+        self._unlock_db(conn)
         self._corked = True
 
     def write(self, table, item):
@@ -271,36 +273,36 @@ class DatabaseWriter:
             self._cache.commit()
             self._begin(self._cache)
 
-    def deduplicate(self):
+    def deduplicate(self, conn=None):
         self.log.info('Deduplicating database records')
-        cache = self._cache
-        cache.commit()
-        self._begin_exclusive(cache)
+        conn = conn or self._cache
+        conn.commit()
+        self._begin_exclusive(conn)
         try:
             with watch_for_timing('Deduplicating'):
                 for table in self.db.tables:
-                    table.fast_dedup(cache)
+                    table.fast_dedup(conn)
         except sqlite3.IntegrityError:
-            cache.rollback()
+            conn.rollback()
             raise
         finally:
-            cache.commit()
+            conn.commit()
 
-    def reconcile(self):
+    def reconcile(self, conn=None):
         self.log.info('Enforcing internal references')
-        cache = self._cache
-        cache.commit()
-        self._begin_exclusive(cache)
+        conn = conn or self._cache
+        conn.commit()
+        self._begin_exclusive(conn)
         try:
             with watch_for_timing('Fixing foreign keys'):
-                mismatches = cache.execute('PRAGMA foreign_key_check')
+                mismatches = conn.execute('PRAGMA foreign_key_check')
                 for table, rowid, parent, fkid in mismatches:
-                    self.db.tablemap[table].update_fk(cache, fkid, rowid)
+                    self.db.tablemap[table].update_fk(conn, fkid, rowid)
         except sqlite3.IntegrityError:
-            cache.rollback()
+            conn.rollback()
             raise
         else:
-            cache.commit()
+            conn.commit()
 
     def merge(self):
         self.cork()
