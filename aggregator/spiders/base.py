@@ -152,7 +152,7 @@ class FeedlyRSSSpider(Spider, ABC):
 
         if action == 'e':
             raise CloseSpider()
-        elif action == 's':
+        if action == 's':
             freezer.clear()
             freezer.dump_info({'crawling': feed})
             return False
@@ -186,7 +186,7 @@ class FeedlyRSSSpider(Spider, ABC):
         feeds = meta.get('valid_feeds')
         if feeds is None:
             feeds = meta.get('try_feeds', {})
-        if not len(feeds) and meta['reason'] == 'user_specified':
+        if not feeds and meta['reason'] == 'user_specified':
             self.logger.info(f'No valid RSS feed can be found using `{meta["feed_url"]}` and available feed templates.')
             self.logger.critical('No feed to crawl!')
 
@@ -236,8 +236,7 @@ class FeedlyRSSSpider(Spider, ABC):
         url = self.get_streams_url(feed, **params)
         if response:
             return response.request.replace(url=url, meta=meta, **kwargs)
-        else:
-            return Request(url, callback=self.parse_feed, meta=meta, **kwargs)
+        return Request(url, callback=self.parse_feed, meta=meta, **kwargs)
 
     def parse_feed(self, response: TextResponse):
         if not response:

@@ -116,4 +116,4 @@ def describe_database(path, out):
 
 
 if __name__ == '__main__':
-    describe_database(*sys.argv[1:])
+    describe_database(sys.argv[1], sys.argv[2])

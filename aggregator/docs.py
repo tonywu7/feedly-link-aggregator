@@ -104,7 +104,7 @@ class OptionsContributor:
             '\n',
         ]
 
-        for cls, options, order in sorted(docs, key=lambda t: t[2], reverse=True):
+        for cls, options, _ in sorted(docs, key=lambda t: t[2], reverse=True):
             yield click.style('-------------\n', fg='black', bold=True)
             yield f'**{repr(cls)}**\n'
             yield '\n'

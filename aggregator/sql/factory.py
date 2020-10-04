@@ -214,8 +214,8 @@ class Table:
                   f'({select})')
 
         columns = list(self.columns)
-        for i in range(len(columns)):
-            if columns[i] == self.rowid:
+        for i, c in enumerate(columns):
+            if c == self.rowid:
                 columns[i] = f'{func}({self.rowid}) AS {self.rowid}'
                 break
         columns = ', '.join(columns)
@@ -282,8 +282,8 @@ class Table:
                 f'WHERE {self.name}.rowid == ?'
             )
 
-            def do_update(conn, rowid, update=update, delete=delete,
-                          select1=select_referred, select2=select_key):
+            def do_update_row(conn, rowid, update=update, delete=delete,
+                              select1=select_referred, select2=select_key):
                 try:
                     referred = conn.execute(select1, (rowid,))
                     referred = referred.fetchone()[0]
@@ -293,7 +293,7 @@ class Table:
                 except sqlite3.IntegrityError:
                     conn.execute(delete, (rowid,))
 
-            update_funcs[local_column] = do_update
+            update_funcs[local_column] = do_update_row
 
         def do_update(conn, fkid, rowid):
             update_funcs[fkid](conn, rowid)
@@ -554,8 +554,5 @@ class DatabaseVersionError(TypeError):
 
 
 class DatabaseNotEmptyError(ValueError):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def __str__(self):
         return 'Database already has other data and cannot be used in this program.'

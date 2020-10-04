@@ -60,7 +60,7 @@ class RobustQueueListener(QueueListener):
         try:
             super()._monitor()
         except EOFError:
-            log.warn('Log listener has prematurely stopped.')
+            log.warning('Log listener has prematurely stopped.')
 
 
 class QueueListenerWrapper:
@@ -246,10 +246,9 @@ def read_jsonlines(f, *, delimiter='\0\n', on_error='raise', paginate=100000, on
         except json.JSONDecodeError:
             if on_error == 'raise':
                 raise
-            elif on_error == 'continue':
+            if on_error == 'continue':
                 continue
-            else:
-                raise StopIteration
+            return
 
         next_line = f.readline()
 

@@ -48,7 +48,7 @@ class MappingExporter(ABC):
 
     def get_file(self, item: JSONDict):
         if self.opened > 200:
-            for k, f in self.files.items():
+            for f in self.files.values():
                 f.close()
             self.opened = 0
 
@@ -77,7 +77,7 @@ class MappingExporter(ABC):
 
     def close(self):
         if not self.files:
-            self.logger.warn('Exported nothing!')
+            self.logger.warning('Exported nothing!')
         for f in self.files.values():
             f.close()
 
@@ -128,7 +128,7 @@ class MappingLineExporter(MappingExporter):
 
 
 class MappingCSVExporter(MappingExporter):
-    def __init__(self, fieldnames: Set[str] = None, *args, **kwargs):
+    def __init__(self, fieldnames: Set[str], *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.writers = {}
         self.fieldnames = fieldnames
