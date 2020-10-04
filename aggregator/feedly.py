@@ -81,7 +81,7 @@ class FeedlyEntry:
     @classmethod
     def from_upstream(cls, item: JSONDict) -> FeedlyEntry:
         data = {}
-        for name, attrib in attr.fields_dict(cls).items():
+        for name in attr.fields_dict(cls):
             value = item.get(name)
             if value:
                 data[name] = value
@@ -108,8 +108,7 @@ class FeedlyEntry:
         source = item.get('origin')
         if source:
             return get_feed_uri(source.get('streamId', '/'))
-        else:
-            return ''
+        return ''
 
     @staticmethod
     def _set_markup(entry, item):

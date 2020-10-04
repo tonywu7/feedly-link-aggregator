@@ -55,8 +55,8 @@ def export_load_exporter(ctx: click.Context, param, value):
     not_found = False
     try:
         exporter = import_module(f'.{value}', exporters.__name__)
-        exporter.export
-    except (AttributeError, ModuleNotFoundError):
+        assert exporter.export
+    except (AttributeError, ModuleNotFoundError, AssertionError):
         not_found = True
         exporter = export
     if ctx.params.get('help'):

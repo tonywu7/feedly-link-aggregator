@@ -42,7 +42,7 @@ class DatabaseWriter:
             self.log.setLevel(logging.WARNING)
 
         main_db = Path(path)
-        cache_db = cache_path and Path(cache_path) or append_stem(path, f'~tmp-{randstr(8)}')
+        cache_db = Path(cache_path) if cache_path else append_stem(path, f'~tmp-{randstr(8)}')
 
         self.db = database
         self._queues = {t: deque() for t in database.tablemap}
@@ -81,8 +81,8 @@ class DatabaseWriter:
     def _lock_db(self, conn: sqlite3.Connection):
         self.log.debug(f'Locking database {self._paths[conn]}')
         if self.db.is_locked(conn):
-            self.log.warn('Database lock table exists')
-            self.log.warn('Previous crawler did not exit properly')
+            self.log.warning('Database lock table exists')
+            self.log.warning('Previous crawler did not exit properly')
         self.db.mark_as_locked(conn)
 
     def _unlock_db(self, conn: sqlite3.Connection):
@@ -131,9 +131,9 @@ class DatabaseWriter:
                 self.log.debug('Began exclusive transaction'
                                f' on {self._paths[conn]}')
             except sqlite3.OperationalError:
-                self.log.warn('Cannot acquire exclusive write access')
-                self.log.warn('Another program is writing to the database')
-                self.log.warn('Retrying...')
+                self.log.warning('Cannot acquire exclusive write access')
+                self.log.warning('Another program is writing to the database')
+                self.log.warning('Retrying...')
             else:
                 return
 
@@ -332,13 +332,9 @@ class DatabaseWriter:
             self.cork()
             self.close()
             return
-        try:
-            self.merge()
-            self.close()
-        except Exception:
-            raise
-        else:
-            self.cleanup()
+        self.merge()
+        self.close()
+        self.cleanup()
 
     def _tally(self, conn):
         count = self.db.count_rows(conn)

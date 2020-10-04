@@ -35,7 +35,7 @@ log = logging.getLogger('exporter.uncharted')
 @with_db
 def export(conn: sqlite3.Connection, wd: Path, output: Path,
            include=None, exclude=None,
-           fmt='uncharted.json', *args, **kwargs):
+           fmt='uncharted.json', **kwargs):
 
     temp = """
     CREATE TEMP TABLE domains (id INTEGER, domain VARCHAR)

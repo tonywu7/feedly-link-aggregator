@@ -76,8 +76,8 @@ class CompressedStreamExportPipeline:
         if spider.config.getbool('PERSIST_TO_DB_ON_CLOSE', True):
             spider.digest_feed_export(self.stream)
         else:
-            self.logger.warn('Scraped data have not been saved to database.')
-            self.logger.warn('To save them, run `python -m aggregator consume-leftovers`')
+            self.logger.warning('Scraped data have not been saved to database.')
+            self.logger.warning('To save them, run `python -m aggregator consume-leftovers`')
             date = f'{self.stream_path.suffixes[0]}.{self.stream_path.suffixes[1]}'
             unsaved = self.stream_path.with_name(f'stream~unsaved.{date}.jsonl.gz')
             self.stream_path.rename(unsaved)
@@ -259,7 +259,6 @@ class DatabaseStorageProcess(ctx.Process):
                 leftovers.append(self.item_queue.get(timeout=2))
         except Empty:
             self.log.debug('Queue depleted.')
-            pass
         for table, item in leftovers:
             stream.write(table, item)
         self.flush()
@@ -275,9 +274,9 @@ class DatabaseStorageProcess(ctx.Process):
             with suppress(Exception):
                 self.stream.interrupt()
         else:
-            self.log.warn('Database writer process protected from SIGINT')
-            self.log.warn('Send SIGINT again to force unclean shutdown.')
-            self.log.warn(_('Sending SIGINT again may cause some records to be lost.', color='yellow'))
+            self.log.warning('Database writer process protected from SIGINT')
+            self.log.warning('Send SIGINT again to force unclean shutdown.')
+            self.log.warning(_('Sending SIGINT again may cause some records to be lost.', color='yellow'))
 
     def close(self):
         if self._abort > 2:
@@ -340,7 +339,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             except Full:
                 self.set_retry()
                 if self.closing.is_set():
-                    self.log.warn('Record discarded because writer process was terminated.')
+                    self.log.warning('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
                 with watch_for_len('pending records', buffer, self.maxsize):
@@ -354,7 +353,8 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                 and (len(self.buffer) > self.maxsize
                      or self.retry + self.retry_after < int(time.time()))):
                 self.buffer.append(item)
-                return self.flush()
+                self.flush()
+                return
             try:
                 self.queue.put_nowait(item)
             except Full:
@@ -428,7 +428,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
 
     def process_item(self, data, spider):
         if self.closed:
-            self.log.warn('Record discarded because writer process was terminated.')
+            self.log.warning('Record discarded because writer process was terminated.')
             return data
         self.check_error(spider)
         return super().process_item(data, spider)

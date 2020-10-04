@@ -167,7 +167,7 @@ def create_domain_graph(db: sqlite3.Connection, include=None, exclude=None):
 @with_db
 def export(conn: sqlite3.Connection, wd: Path, output: Path,
            fmt='index.graphml', graphtype='hyperlink',
-           include=None, exclude=None, *args, **kwargs):
+           include=None, exclude=None, **kwargs):
 
     reader = {
         'hyperlink': create_hyperlink_graph,

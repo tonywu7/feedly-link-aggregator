@@ -62,7 +62,7 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
             if increase_in == 1:
                 should_increase.append(r)
                 continue
-            elif increase_in > 1:
+            if increase_in > 1:
                 r.meta['inc_depth'] = increase_in - 1
             other_items.append(r)
         other_items.extend(super().process_spider_output(response, should_increase, spider))
@@ -146,7 +146,6 @@ class FeedProbingDownloaderMiddleware:
     async def probe_feed_status(self, feeds, download, spider):
         requests = []
         for feed in feeds:
-            feed = feed
             requests.append(download(Request(
                 get_feed_uri(feed), method='HEAD', meta={
                     'url': feed,
@@ -356,19 +355,19 @@ class HTTPErrorDownloaderMiddleware:
 
     def process_response(self, request, response: Response, spider):
         if response.status == 401:
-            self.log.warn('Server returned HTTP 401 Unauthorized.')
-            self.log.warn('This is because you are accessing an API that requires authorization, and')
-            self.log.warn('your either did not provide, or provided a wrong access token.')
-            self.log.warn(f'URL: {request.url}')
+            self.log.warning('Server returned HTTP 401 Unauthorized.')
+            self.log.warning('This is because you are accessing an API that requires authorization, and')
+            self.log.warning('your either did not provide, or provided a wrong access token.')
+            self.log.warning(f'URL: {request.url}')
             raise IgnoreRequest()
         if response.status == 429 and urlsplit(request.url) == 'cloud.feedly.com':
             retry_after = response.headers.get('Retry-After')
             if retry_after:
                 retry_after = int(retry_after)
-                self.log.warn('Server returned HTTP 429 Too Many Requests.')
-                self.log.warn('Either your IP address or your developer account is being rate-limited.')
-                self.log.warn(f'Retry-After = {retry_after}s')
-                self.log.warn(f'Scrapy will now pause for {retry_after}s')
+                self.log.warning('Server returned HTTP 429 Too Many Requests.')
+                self.log.warning('Either your IP address or your developer account is being rate-limited.')
+                self.log.warning(f'Retry-After = {retry_after}s')
+                self.log.warning(f'Scrapy will now pause for {retry_after}s')
                 spider.crawler.engine.pause()
                 to_sleep = retry_after * 1.2
                 try:
