@@ -17,7 +17,7 @@ def walk_package(path=None, name=__name__):
 
 def _config_logging():
     # Aggressively take over control of logging from Scrapy
-    # Set LOG_USE_CUSTOM_CONFIG=False to give control back to Scrapy
+    # Set LOG_USING_CUSTOM_CONFIG=False to give control back to Scrapy
 
     import logging
     import sys
@@ -61,7 +61,7 @@ def _parse_sysargs():
     from . import settings as scrapy_settings
 
     g = vars(scrapy_settings)
-    if not g.get('LOG_USE_CUSTOM_CONFIG'):
+    if not g.get('LOG_USING_CUSTOM_CONFIG'):
         return
 
     defaults = [

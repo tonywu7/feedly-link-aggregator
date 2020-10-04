@@ -59,6 +59,12 @@ from .utils import fmttimedelta, sha1sum
 
 
 class LoggingOverride:
+    @classmethod
+    def from_crawler(cls, crawler):
+        if not crawler.settings.getbool('LOG_USING_CUSTOM_CONFIG'):
+            raise NotConfigured()
+        return cls()
+
     def __init__(self):
         import sys
         from logging import StreamHandler
