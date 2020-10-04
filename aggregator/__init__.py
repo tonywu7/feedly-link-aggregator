@@ -15,15 +15,14 @@ def walk_package(path=None, name=__name__):
             yield from walk_package(path / module_name, pkg_name)
 
 
-def _config_logging(aggresive=False):
+def _config_logging():
     # Aggressively take over control of logging from Scrapy
-    # This function modifies sys.argv
     # Set LOG_USE_CUSTOM_CONFIG=False to give control back to Scrapy
 
     import logging
     import sys
     from logging.config import dictConfig
-    from pathlib import Path
+
     from .logger import make_logging_config
 
     settings, config = _parse_sysargs()
@@ -51,16 +50,14 @@ def _config_logging(aggresive=False):
         overrides += config['overrides']
         dictConfig(make_logging_config('feedly', *overrides, **config))
 
-    if aggresive and Path(sys.argv[0]).name == 'scrapy':
-        # Is Scrapy command
-        _destroy_logging_params(settings=settings)
-
 
 def _parse_sysargs():
     import argparse
     import sys
     from operator import itemgetter
+
     from scrapy.settings import Settings
+
     from . import settings as scrapy_settings
 
     g = vars(scrapy_settings)
@@ -124,4 +121,4 @@ def _destroy_logging_params(settings=None):
     sys.argv.append('--nolog')
 
 
-_config_logging(aggresive=True)
+_config_logging()
