@@ -116,7 +116,7 @@ class PresetLoader:
 
         settings['PRESET'] = preset
         logging.getLogger('extensions.autoload').info(
-            _(f'Auto-loaded preset {preset.relative_to(presets_dir)} '
+            _(f'Auto-loaded preset "{preset.relative_to(presets_dir)}" '
               'based on the provided feed URL.', color='cyan'),
         )
 

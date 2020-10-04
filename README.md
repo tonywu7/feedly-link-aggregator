@@ -31,6 +31,18 @@ Install dependencies:
 > python3 -m pip install -r requirements.txt
 ```
 
+> _Note for Windows users:_
+> If running the above command fails (outputting a lot of errors):
+> - Download a pre-built Twisted wheel from [this website](https://www.lfd.uci.edu/~gohlke/pythonlibs/#twisted).
+    - You will need to choose one of the options: the `cpxx` part should match your Python version: e.g. if you are
+    using Python 3.8 then it should be `cp38`. Then choose one of `win32` or `amd64` depending on whether your Windows
+    is 32- or 64-bit (most likely it will be `amd64`).
+> - Install using `pip`:
+> ```bash
+> > python3 -m pip install <path-to-the-file-just-downloaded>
+> ```
+> - _Then_ run `pip install -r requirements.txt`
+
 Then start crawling:
 
 ```bash
