@@ -19,7 +19,7 @@ LOG_LEVEL = 20
 
 # This program uses a custom logging config (see __init__.py)
 # To give control of logging back to Scrapy, set this to False
-LOG_USE_CUSTOM_CONFIG = True
+LOG_USING_CUSTOM_CONFIG = True
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
 USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkaggregator/{__version__}; +https://github.com/monotony113/feedly-link-aggregator)'
@@ -97,6 +97,7 @@ ITEM_PIPELINES = {
 
 LOGSTATS_INTERVAL = 60.0
 METRICS_CALC_INTERVAL = 20.0
+
 LOG_VIOLATIONS = False
 
 AUTO_LOAD_PREDEFINED_PRESETS = True

@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import List
 from urllib.parse import unquote
 
+from scrapy.utils.url import add_http_if_no_scheme
+
 
 def single_item(f):
     def wrapped(*args, **kwargs):
@@ -41,7 +43,7 @@ class SettingsAdapter:
     @staticmethod
     @single_item
     def rss(v):
-        return unquote(v)
+        return add_http_if_no_scheme(unquote(v))
 
     @staticmethod
     @single_item
