@@ -58,6 +58,71 @@ from .utils import colored as _
 from .utils import fmttimedelta, sha1sum
 
 
+class LoggingOverride:
+    def __init__(self):
+        import sys
+        from logging import StreamHandler
+        root = logging.getLogger()
+        for handler in root.handlers:
+            if (
+                isinstance(handler, StreamHandler)
+                and handler.get_name() != 'console'
+                and handler.stream is sys.stderr
+            ):
+                handler.setLevel(100)
+
+
+class PresetLoader:
+    @classmethod
+    def from_crawler(cls, crawler: Crawler):
+        import re
+
+        settings: BaseSettings = crawler.settings
+        if 'PRESET' in settings or 'preset' in settings:
+            raise NotConfigured()
+        if not settings.getbool('AUTO_LOAD_PREDEFINED_PRESETS', True):
+            raise NotConfigured()
+
+        presets_dir = Path(__file__).parent.with_name('presets')
+        if not presets_dir.exists():
+            raise NotConfigured()
+        auto_load = presets_dir / '_autoload.py'
+        if not auto_load.exists():
+            raise NotConfigured()
+
+        try:
+            sites = {}
+            SettingsLoader.from_pyfile(sites, auto_load)
+            sites = sites['_SITES']
+        except (OSError, ImportError, KeyError):
+            raise NotConfigured()
+
+        feed = settings['RSS'] or settings['rss']
+        if not feed:
+            raise NotConfigured()
+
+        preset = None
+        for r, p in sites.items():
+            if re.match(r, feed):
+                preset = p
+                break
+
+        if not preset:
+            raise NotConfigured()
+
+        preset = presets_dir / f'{preset}.py'
+        if not preset.exists():
+            raise NotConfigured()
+
+        settings['PRESET'] = preset
+        logging.getLogger('extensions.autoload').info(
+            _(f'Auto-loaded preset {preset.relative_to(presets_dir)} '
+              'based on the provided feed URL.', color='cyan'),
+        )
+
+        return cls()
+
+
 class SettingsLoader:
     @classmethod
     def from_crawler(cls, crawler: Crawler):

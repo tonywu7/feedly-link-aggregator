@@ -138,7 +138,7 @@ def datetime_converters(dt: Union[str, int, float, datetime], tz=timezone.utc) -
     if isinstance(dt, (int, float)):
         try:
             return datetime.fromtimestamp(dt, tz=tz)
-        except ValueError:
+        except (ValueError, OSError):
             return datetime.fromtimestamp(dt / 1000, tz=tz)
     raise TypeError('dt must be of type str, int, float, or datetime')
 

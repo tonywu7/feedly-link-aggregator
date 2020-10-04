@@ -77,8 +77,10 @@ DOWNLOADER_MIDDLEWARES = {
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
-    'aggregator.extensions.SettingsLoader': 100,
-    'aggregator.extensions.LogStatsExtended': 101,
+    'aggregator.extensions.LoggingOverride': 90,
+    'aggregator.extensions.PresetLoader': 100,
+    'aggregator.extensions.SettingsLoader': 101,
+    'aggregator.extensions.LogStatsExtended': 102,
     'aggregator.extensions.RequestMetrics': 102,
     'aggregator.extensions.ContribMiddleware': 200,
     'aggregator.extensions.GlobalPersistence': 999,
@@ -96,6 +98,8 @@ ITEM_PIPELINES = {
 LOGSTATS_INTERVAL = 60.0
 METRICS_CALC_INTERVAL = 20.0
 LOG_VIOLATIONS = False
+
+AUTO_LOAD_PREDEFINED_PRESETS = True
 
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
