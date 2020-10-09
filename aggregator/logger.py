@@ -30,6 +30,12 @@ try:
 except ImportError:
     _ = None
 
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    _ = None
+
 
 def compose_mappings(*mappings):
     base = {}
