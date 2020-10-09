@@ -54,6 +54,3 @@ class CrawlCommand(Command, _LoggingMixin):
             self.settings['VERBOSE'] = True
             self.settings.set('LOG_VIOLATIONS', True, priority='cmdline')
             self.settings.set('STATS_DUMP', True, priority='cmdline')
-
-    def run(self, *args, **kwargs):
-        return super().run(*args, **kwargs)

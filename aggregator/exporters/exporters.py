@@ -55,6 +55,10 @@ class MappingExporter(ABC):
         filename = self.escape(self.filename % item)
         if filename[-1] == '/':
             filename = f'{filename}index{self.ext}'
+        if filename == '.':
+            filename = '-.'
+        if filename == '..':
+            filename = '-..'
         path = self.output / filename
 
         f, new = self.open_file(path)

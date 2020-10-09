@@ -201,7 +201,7 @@ formatter_styles = {
 }
 
 logging_config_template = {
-    'disable_existing_loggers': True,
+    'disable_existing_loggers': False,
     'version': 1,
     'handlers': {
         'console': {
