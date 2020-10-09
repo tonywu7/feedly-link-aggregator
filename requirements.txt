@@ -61,3 +61,4 @@ Scrapy==2.3.0
   zope.interface==5.1.0
     setuptools==41.2.0
 simplejson==3.17.2
+termcolor==1.1.0
