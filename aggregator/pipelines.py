@@ -22,6 +22,7 @@
 
 import gzip
 import logging
+import platform
 import signal
 import time
 from collections import deque
@@ -46,8 +47,14 @@ from .utils import json_converters, watch_for_len, watch_for_timing
 
 NULL_TERMINATE = {'\0': True}
 
+MP_METHODS = {
+    'Darwin': 'forkserver',
+    'Linux': 'fork',
+    'Windows': 'spawn',
+}
+
 try:
-    ctx = get_context('forkserver')
+    ctx = get_context(MP_METHODS[platform.system()])
 except ValueError:
     ctx = get_context('spawn')
 
