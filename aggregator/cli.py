@@ -23,12 +23,13 @@
 import logging
 from importlib import import_module
 from pathlib import Path
+from textwrap import dedent
 
 import click
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
-from . import exporters
+from . import _config_logging, exporters
 from .docs import markdown_inline, numpydoc2click
 from .sql.cli import check, leftovers, merge, migrate
 
@@ -43,11 +44,8 @@ def get_help(ctx):
 @click.option('--debug', is_flag=True)
 @click.pass_context
 def cli(ctx, debug=False):
-    if debug:
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
-        for handler in root.handlers:
-            handler.setLevel(logging.DEBUG)
+    level = logging.DEBUG if debug else logging.INFO
+    _config_logging(level=level)
     ctx.ensure_object(dict)
     ctx.obj['DEBUG'] = debug
 
@@ -146,7 +144,7 @@ def export(topic, exporter_args, **kwargs):
     topic.export(**kwargs, **options)
 
 
-@cli.command()
+@cli.command(hidden=True)
 @click.option('-s', 'spider')
 @click.option('-p', 'preset')
 def run_spider(spider, preset, **kwargs):
@@ -201,12 +199,14 @@ def merge_db(ctx, *, db_paths, output, debug=False, **kwargs):
 @click.option('-d', '--sql-debug', 'debug', type=click.Path(exists=False, dir_okay=False),
               help='Optional file to write executed SQL statements to.')
 @click.pass_context
-def consume_leftovers(ctx, wd, debug=False, **kwargs):
+def cleanup(ctx, wd, debug=False, **kwargs):
+    """Find all temporary databases and attempt to merge them into the main database."""
+
     ctx.exit(leftovers(wd, debug=debug))
 
 
 @cli.command()
-def customizations():
+def options():
     """List available spider options."""
 
     from . import walk_package
@@ -215,3 +215,29 @@ def customizations():
 
     from .docs import OptionsContributor
     click.echo_via_pager(OptionsContributor.format_docs())
+
+
+@cli.command(hidden=True)
+def gen_commands():
+    template = dedent("""
+    from scrapy.commands import ScrapyCommand
+
+    from .utils import _ClickCommand
+
+
+    class Command(_ClickCommand, ScrapyCommand):
+        def click_command(self):
+            return __name__.split('.')[-1].replace('-', '_')
+    """).lstrip().rstrip(' ')
+
+    path = Path(__file__).with_name('commands')
+    for p in path.iterdir():
+        if not p.is_file():
+            continue
+        content = open(p).read()
+        if content == template:
+            p.unlink()
+    for k, v in cli.commands.items():
+        if not v.hidden:
+            with open(path / f'{k}.py', 'w+') as f:
+                f.write(template)

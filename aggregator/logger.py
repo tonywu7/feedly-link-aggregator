@@ -195,6 +195,7 @@ formatter_styles = {
 }
 
 logging_config_template = {
+    'disable_existing_loggers': True,
     'version': 1,
     'handlers': {
         'console': {
@@ -206,17 +207,17 @@ logging_config_template = {
         'main': {
             'level': logging.NOTSET,
         },
-        'scrapy': {
-            'level': logging.NOTSET,
-        },
         'scrapy.core': {
             'level': logging.NOTSET,
         },
         'scrapy.core.engine': {
             'level': logging.NOTSET,
         },
+        'scrapy.crawler': {
+            'level': logging.WARNING,
+        },
         'scrapy.middleware': {
-            'level': logging.NOTSET,
+            'level': logging.WARNING,
         },
         'twisted': {
             'level': logging.ERROR,
@@ -230,21 +231,22 @@ logging_config_template = {
 
 def make_logging_config(
     app_name, *overrides, level=logging.INFO,
-    style='standard', colored=True, **kwargs,
+    style='standard', colored=True, datefmt=None,
+    logfile=None, **kwargs,
 ):
     color_mode = 'colored' if colored and _ else 'normal'
-    try:
+    if style in formatter_styles:
         formatter = formatter_styles[style][color_mode]
-    except KeyError:
+    else:
         formatter = style
 
     app_logging_config = {
         'formatters': {
-            'fmt': formatter,
+            'default_fmt': formatter,
         },
         'handlers': {
             'console': {
-                'formatter': 'fmt',
+                'formatter': 'default_fmt',
                 'level': level,
             },
         },
@@ -258,9 +260,43 @@ def make_logging_config(
         },
     }
 
+    file_handler_config = {}
+    if logfile:
+        file_handler_config = {
+            'formatters': {
+                'no_color': (formatter_styles[style]['normal']
+                             if style in formatter_styles else style),
+            },
+            'handlers': {
+                'file': {
+                    'class': 'logging.FileHandler',
+                    'filename': logfile,
+                    'formatter': 'no_color',
+                },
+            },
+            'root': {
+                'handlers': ['file'],
+            },
+        }
+
+    datefmt_config = {}
+    if datefmt:
+        datefmt_config = {
+            'formatters': {
+                'default_fmt': {
+                    'datefmt': datefmt,
+                },
+                'no_color': {
+                    'datefmt': datefmt,
+                },
+            },
+        }
+
     log_config = compose_mappings(
         logging_config_template,
         app_logging_config,
+        file_handler_config,
+        datefmt_config,
         *overrides,
     )
     return log_config

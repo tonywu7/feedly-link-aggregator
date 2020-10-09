@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 import atexit
-import cProfile
 import gzip
 import logging
 import os
@@ -58,26 +57,6 @@ from .utils import colored as _
 from .utils import fmttimedelta, sha1sum
 
 
-class LoggingOverride:
-    @classmethod
-    def from_crawler(cls, crawler):
-        if not crawler.settings.getbool('LOG_USING_CUSTOM_CONFIG'):
-            raise NotConfigured()
-        return cls()
-
-    def __init__(self):
-        import sys
-        from logging import StreamHandler
-        root = logging.getLogger()
-        for handler in root.handlers:
-            if (
-                isinstance(handler, StreamHandler)
-                and handler.get_name() != 'console'
-                and handler.stream is sys.stderr
-            ):
-                handler.setLevel(100)
-
-
 class PresetLoader:
     @classmethod
     def from_crawler(cls, crawler: Crawler):
@@ -112,7 +91,6 @@ class PresetLoader:
             if re.match(r, feed):
                 preset = p
                 break
-
         if not preset:
             raise NotConfigured()
 
@@ -208,28 +186,32 @@ class GlobalPersistence:
     def __init__(self, crawler):
         self.signals = crawler.signals
         self.logger = logging.getLogger('worker.persistence')
+
         settings = crawler.settings
+        self.settings = settings
+
+        output = settings['OUTPUT']
+        os.makedirs(output, exist_ok=True)
 
         self._jobdir = settings['JOBDIR']
-        output = settings['OUTPUT']
-        self.state_path = output / 'program.state'
-        self.conf_path = output / 'options.json'
-        self.archive_path = output / 'scheduled' / 'freezer'
+        self.path_state = output / 'program.state'
+        self.path_opts = output / 'options.json'
+        self.path_archive = output / 'scheduled' / 'freezer'
 
         self.closing = Event()
         self.thread = Thread(None, target=self.worker, name='RequestPersistenceThread',
                              args=(self.closing,), daemon=True)
         self.future = None
 
-        self.freezer = RequestFreezer(self.archive_path)
+        self.freezer = RequestFreezer(self.path_archive)
         self.thread.start()
 
         self.state = self.load_state()
-        self.spider_conf = settings['SPIDER_CONFIG'].copy_to_dict()
 
         atexit.register(self.archive)
         atexit.register(self.close)
         atexit.register(self.rmjobdir)
+        self.dump_opts()
 
     def worker(self, closing: Event):
         while not closing.wait(20):
@@ -245,18 +227,20 @@ class GlobalPersistence:
 
     def load_state(self):
         with suppress(FileNotFoundError, EOFError, gzip.BadGzipFile):
-            with gzip.open(self.state_path, 'rb') as f:
+            with gzip.open(self.path_state, 'rb') as f:
                 return pickle.load(f)
         return {}
 
     def dump_state(self):
-        with gzip.open(self.state_path, 'wb+') as f, suppress(RuntimeError):
+        with gzip.open(self.path_state, 'wb+') as f, suppress(RuntimeError):
             pickled = pickle.dumps(self.state)
             f.write(pickled)
 
-    def dump_conf(self):
-        with open(self.conf_path, 'w+') as f:
-            pickle.dump(self.spider_conf, f)
+    def dump_opts(self):
+        if 'CMDLINE_ARGS' not in self.settings:
+            return
+        with open(self.path_opts, 'w+') as f:
+            json.dump(self.settings['CMDLINE_ARGS'], f)
 
     def register(self, obj, namespace, attrs):
         for attr in attrs:
@@ -274,7 +258,7 @@ class GlobalPersistence:
         self.freezer.remove(request)
 
     def resume_crawl(self, spider):
-        if self.archive_path.exists():
+        if self.path_archive.exists():
             self.logger.info('Restoring persisted requests...')
         spider.freezer = self.freezer
 
@@ -605,25 +589,3 @@ class LogStatsExtended(LogStats):
             self.logger.info(f'{k}:')
             self._log(n, values, rates)
             self.logger.info('')
-
-
-class CProfile:
-    @classmethod
-    def from_crawler(cls, crawler):
-        instance = cls(crawler.settings.get('CPROFILE_OUTPUT'))
-        crawler.signals.connect(instance.open_spider, spider_opened)
-        crawler.signals.connect(instance.close_spider, spider_closed)
-        return instance
-
-    def __init__(self, path=None):
-        if not path:
-            raise NotConfigured()
-        self.pr = cProfile.Profile()
-        self.path = path
-
-    def open_spider(self, spider):
-        self.pr.enable()
-
-    def close_spider(self, spider):
-        self.pr.disable()
-        self.pr.dump_stats(self.path)
