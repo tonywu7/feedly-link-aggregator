@@ -57,6 +57,14 @@ from .utils import colored as _
 from .utils import fmttimedelta, sha1sum
 
 
+class _LoggingHelper:
+    @classmethod
+    def from_crawler(cls, crawler):
+        if not crawler.settings.getbool('VERBOSE', False):
+            logging.getLogger('scrapy.middleware').disabled = True
+        return cls()
+
+
 class PresetLoader:
     @classmethod
     def from_crawler(cls, crawler: Crawler):
@@ -543,6 +551,10 @@ class LogStatsExtended(LogStats):
                         'requests_in_queue',
                         'requests_in_progress'],
                        namespace='Request stats')
+
+    def spider_opened(self, spider):
+        self.task = task.LoopingCall(self.log, spider)
+        self.task.start(self.interval, now=False)
 
     def add_stats(self, names, namespace='Scraping stats'):
         ns = self.items[namespace]

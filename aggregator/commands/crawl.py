@@ -29,6 +29,8 @@ from .utils import _LoggingMixin
 class CrawlCommand(Command, _LoggingMixin):
     def add_options(self, parser):
         super().add_options(parser)
+        parser.add_option('-v', '--verbose', action='store_true',
+                          help='Log more information')
         parser.remove_option('-a')
         parser.remove_option('-t')
 
@@ -47,6 +49,11 @@ class CrawlCommand(Command, _LoggingMixin):
         self.settings.pop('FEEDS')
 
         self.settings['CMDLINE_ARGS'] = {'args': args, 'opts': vars(opts)}
+
+        if opts.verbose:
+            self.settings['VERBOSE'] = True
+            self.settings.set('LOG_VIOLATIONS', True, priority='cmdline')
+            self.settings.set('STATS_DUMP', True, priority='cmdline')
 
     def run(self, *args, **kwargs):
         return super().run(*args, **kwargs)

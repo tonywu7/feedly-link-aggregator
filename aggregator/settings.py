@@ -17,6 +17,12 @@ NEWSPIDER_MODULE = 'aggregator.spiders'
 LOG_ENABLED = True
 LOG_LEVEL = 20
 
+LOGSTATS_INTERVAL = 60.0
+METRICS_CALC_INTERVAL = 20.0
+
+LOG_VIOLATIONS = False
+STATS_DUMP = False
+
 COMMANDS_MODULE = 'aggregator.commands'
 
 # This program uses a custom logging config (see __init__.py)
@@ -79,6 +85,7 @@ DOWNLOADER_MIDDLEWARES = {
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
+    'aggregator.extensions._LoggingHelper': 99,
     'aggregator.extensions.PresetLoader': 100,
     'aggregator.extensions.SettingsLoader': 101,
     'aggregator.extensions.LogStatsExtended': 102,
@@ -94,11 +101,6 @@ ITEM_PIPELINES = {
     # 'aggregator.pipelines.SQLiteExportPipeline': 900,
     'aggregator.pipelines.SQLiteExportProcessPipeline': 900,
 }
-
-LOGSTATS_INTERVAL = 60.0
-METRICS_CALC_INTERVAL = 20.0
-
-LOG_VIOLATIONS = False
 
 AUTO_LOAD_PREDEFINED_PRESETS = True
 
