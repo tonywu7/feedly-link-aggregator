@@ -17,9 +17,11 @@ NEWSPIDER_MODULE = 'aggregator.spiders'
 LOG_ENABLED = True
 LOG_LEVEL = 20
 
+COMMANDS_MODULE = 'aggregator.commands'
+
 # This program uses a custom logging config (see __init__.py)
 # To give control of logging back to Scrapy, set this to False
-LOG_USING_CUSTOM_CONFIG = True
+CUSTOM_LOGGING_ENABLED = True
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
 USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkaggregator/{__version__}; +https://github.com/monotony113/feedly-link-aggregator)'
@@ -77,14 +79,12 @@ DOWNLOADER_MIDDLEWARES = {
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
-    'aggregator.extensions.LoggingOverride': 90,
     'aggregator.extensions.PresetLoader': 100,
     'aggregator.extensions.SettingsLoader': 101,
     'aggregator.extensions.LogStatsExtended': 102,
     'aggregator.extensions.RequestMetrics': 102,
     'aggregator.extensions.ContribMiddleware': 200,
     'aggregator.extensions.GlobalPersistence': 999,
-    'aggregator.extensions.CProfile': 1000,
 }
 
 # Configure item pipelines
