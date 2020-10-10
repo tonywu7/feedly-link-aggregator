@@ -8,11 +8,11 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 
 ## Quick usage
 
-> ![#96c475](https://placehold.it/12/96c475/000000?text=+) This section describes basic usage of this program that requires little knowledge of Python or even command lines in general.
+> This section describes basic usage of this program that requires little knowledge of Python or even command lines in general.
 >
 > See the [next section](#setup) for more advanced usage of this program as a command-line tool.
 
-[Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
+![#96c475](https://placehold.it/12/96c475/000000?text=+) [Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
 extract it somewhere, then:
 
 - On Windows, run `start.bat`. This will start an interactive program that can perform the most common tasks.
