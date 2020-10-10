@@ -1,6 +1,6 @@
 #!/bin/bash
-which python3 > /dev/null 2>&1
-if [[ $? != 0 ]]; then
+python3 -c 'exit(65)' > /dev/null 2>&1
+if [[ $? != 65 ]]; then
     echo 'Error: cannot find Python 3 executable.'
     echo 'You will need at least Python 3.7+ to run this program.'
     echo

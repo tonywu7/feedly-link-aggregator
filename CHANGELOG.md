@@ -1,5 +1,13 @@
 ## Changelog
 
+- **v0.10.11**
+    - Accessibility update:
+        - New command `scrapy wizard`: an interactive command that can perform simple tasks such as scraping and
+        exporting.
+        - Batch/shell scripts for setting up the program.
+    - New command `scrapy resume`.
+    - Module-level commands are now available as `scrapy` commands.
+    - `multiprocessing` now uses `spawn` on Windows, `forkserver` on macOS (Darwin), and `fork` on Linux.
 - **v0.10.10**
     - Architectural update:
         - Signal-based request persistence and restoration.

@@ -2,8 +2,8 @@
 setlocal
 setlocal enabledelayedexpansion
 
-where "python3" > NUL 2>&1
-if %ERRORLEVEL% neq 0 (
+python3 -c "exit(65)" > NUL 2>&1
+if %ERRORLEVEL% neq 65 (
     echo Error: Python 3 not found.
     echo Install Python 3 from Microsoft Store, or from https://www.python.org/downloads/release/python-386/
     pause

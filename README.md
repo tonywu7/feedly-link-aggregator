@@ -6,9 +6,23 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 **for purposes such as archival work. If you are only looking to browse a feed and/or download a few things,**
 **it's more appropriate (and friendly) to use [Feedly](https://feedly.com) directly.**
 
+## Quick usage
+
+> ![#96c475](https://placehold.it/12/96c475/000000?text=+) This section describes basic usage of this program that requires little knowledge of Python or even command lines in general.
+>
+> See the [next section](#setup) for more advanced usage of this program as a command-line tool.
+
+[Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
+extract it somewhere, then:
+
+- On Windows, run `start.bat`. This will start an interactive program that can perform the most common tasks.
+- On macOS/Linux, run `start.sh` (you may need to fix the permission first, and you may need to know how to start it
+from the terminal if launching it in your file manager doesn't work).
+
 ## Contents
 
 - [Documentation](#documentation)
+    - [Setup](#setup)
     - [Crawling](#crawling)
     - [Presets](#presets)
     - [Exporting](#exporting)
@@ -16,66 +30,38 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 - [Changelog](./CHANGELOG.md)
 - [Notes](#notes)
 
-## Quick usage
+## Documentation
 
-```bash
-> git clone https://github.com/monotony113/feedly-link-aggregator.git
-> cd feedly-link-aggregator
-```
+### Setup
 
-You'll need at least Python 3.7 (project written using Python 3.8.1).
-
-Install dependencies:
+Using a virtual environment is highly recommended.
 
 ```bash
 > python3 -m pip install -r requirements.txt
 ```
 
-> _Note for Windows users:_
-> If running the above command fails (outputting a lot of errors):
-> - Download a pre-built Twisted wheel from [this website](https://www.lfd.uci.edu/~gohlke/pythonlibs/#twisted).
-    - You will need to choose one of the options: the `cpxx` part should match your Python version: e.g. if you are
-    using Python 3.8 then it should be `cp38`. Then choose one of `win32` or `amd64` depending on whether your Windows
-    is 32- or 64-bit (most likely it will be `amd64`).
-> - Install using `pip`:
-> ```bash
-> > python3 -m pip install <path-to-the-file-just-downloaded>
-> ```
-> - _Then_ run `pip install -r requirements.txt`
-
-Then start crawling:
-
-```bash
-> scrapy crawl feed -s rss='<url>' -s output='<dir>'
-```
-
-where `<url>` is the URL to your RSS feed, and `<dir>` is the directory where scraped data and temporary files will be saved.
-For example,
-
-```bash
-> scrapy crawl feed -s rss="https://xkcd.com/atom.xml" -s output=instance/xkcd/
-```
-
-After it's finished, run the following to list all external links found in webpage data provided by Feedly:
-
-```bash
-> python -m aggregator export urls -i '<dir>'
-```
-
-where `<dir>` is the same directory.
-
-## Documentation
+> Note that this command will fail on Windows if Visual C++ build tools are not installed. The recommended way
+> to install dependencies on Windows is to use the `install.bat` script.
 
 ### Crawling
 
 ```bash
-> scrapy crawl <spider> -s rss='<url>' -s output='<dir>' [-s additional options...]
+> scrapy crawl <spider> '<url>' -o '<dir>' [-s additional options...]
 ```
 
-Currently available spiders are `feed` and `cluster`. `feed` crawls a single feed; [`cluster`](#cluster-spider) begins with a single feed
-but attempts to further explore websites that are mentioned in the beginning feed.
+> If this command complains that scrapy cannot be found, your Python packages are not on your PATH.
+> You may either append your PATH, or begin the command with `python -m scrapy`.
+
+Currently available spiders are `feed` and `cluster`. `feed` crawls a single feed; [`cluster`](#cluster-spider)
+begins with a single feed but attempts to further explore websites that are mentioned in the beginning feed.
 
 Each spider option is specified using the `-s` option followed by a `key=value` pair.
+
+Example:
+
+```bash
+> scrapy crawl feed http://xkcd.com/atom.xml -o xkcd -s download_order=newest
+```
 
 ### Presets
 
@@ -99,15 +85,23 @@ Only variables whose names contain only uppercase letters, numbers and underscor
 
 Presets also let you define more complex behaviors, such as URL filtering, since you can define functions and mappings.
 
-For a list of supported options, run `python -m aggregator customizations`. Options that are
+For a list of supported options, run `scrapy options`. Options that are
 simple string/integer values can also be specified on the command line with a case-insensitive key, in which case they take
 precedence over the ones defined in a preset.
 
 ### Exporting
 
 ```bash
-> python -m aggregator export <topic> -i '<dir>'
+> scrapy export <topic> -i '<dir>'
 ```
+
+> Previous versions of this program use a different command `python -m aggregator` for tasks unrelated to Scrapy,
+> which is still supported.
+> 
+> However, the `scrapy` command now supports running those commands as well, and is
+> recommended for uniformity.
+> 
+> For a list of all available commands, run `scrapy`.
 
 Currently `<topic>` can be
 
@@ -117,7 +111,7 @@ Currently `<topic>` can be
 **![#56b6c2](https://placehold.it/12/56b6c2/000000?text=+) Example: Tumblr GIFs**
 
 ```bash
-python -m aggregator export urls -i data \
+scrapy export urls -i data \
   --include tag is img \
   --include source:netloc under tumblr.com \
   --include target:netloc under media.tumblr.com \
@@ -150,7 +144,7 @@ resulting in a folder structure that looks like
 ----
 
 For the `urls` exporter, the following features are available. Use the `-h`/`--help` option for a complete documentation:
-`python -m aggregator export urls --help`.
+`scrapy export urls --help`.
 
 #### Output template
 
@@ -167,7 +161,7 @@ files and even folders to your liking.
 For example, with scraped data from the feed [`https://xkcd.com/atom.xml`](https://xkcd.com/atom.xml), an export command
 
 ```bash
-> python -m aggregator export urls -i data -o "%(feed:title)s/%(tag)s/%(target:netloc)s.csv"
+> scrapy export urls -i data -o "%(feed:title)s/%(tag)s/%(target:netloc)s.csv"
 ```
 
 could generate the following directory structure:
@@ -183,7 +177,7 @@ could generate the following directory structure:
                 www.barnesandnoble.com.csv
                 ...
 
-For a list of available placeholders, see the command help: `python -m aggregator export urls --help`.
+For a list of available placeholders, see the command help: `scrapy export urls --help`.
 
 #### Filtering
 
@@ -201,7 +195,7 @@ Use the `--include`/`--exclude` (shorthands `+f`/`-f`) to specify filters:
 Filter options can be specified multiple times to enable multiple filters, Only URLs that pass _all_ filters are exported.
 
 You can filter on URL components, feed and post titles, and dates published. For a list of filterable attributes (they are the
-same as the naming template placeholders), see the command help: `python -m aggregator export urls --help`.
+same as the naming template placeholders), see the command help: `scrapy export urls --help`.
 
 ### Cluster spider
 

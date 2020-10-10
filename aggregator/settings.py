@@ -7,7 +7,7 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
-__version__ = '0.10.10'
+__version__ = '0.10.11'
 
 BOT_NAME = 'feedly'
 

@@ -21,7 +21,9 @@
 # SOFTWARE.
 
 from cmd import Cmd
+from textwrap import dedent
 
+from click import echo_via_pager
 from scrapy.cmdline import execute
 from scrapy.commands import ScrapyCommand
 
@@ -89,8 +91,6 @@ class Wizard(Cmd):
 
     def do_scrape(self, arg=None):
         """Scrape an RSS feed."""
-        print(self.do_scrape.__doc__)
-
         form = Form(
             ['rss', 'Please enter the URL to the site you would like to crawl', None, None],
             ['output', 'Please enter a path to a folder where scraped data will be saved', None, dir_validator],
@@ -113,8 +113,6 @@ class Wizard(Cmd):
 
     def do_resume(self, arg=None):
         """Resume an unfinished scraping task."""
-        print(self.do_resume.__doc__)
-
         form = Form(
             ['output', 'Please enter the path to the output folder of a previously ran task', None, dir_validator],
         )
@@ -131,20 +129,19 @@ class Wizard(Cmd):
 
     def do_export(self, arg=None):
         """Extract URLs from scraped data."""
-        print(self.do_export.__doc__)
         arg = None if not arg else arg
 
         form = Form(
             ['output', 'Please enter the path to the scraped data', arg, exists_validator],
             Form.multiplechoice(
-                'type', ['all', 'images', 'audio/video', 'clickable links'],
+                'type', ['all', 'images', 'sound/videos', 'clickable links'],
                 'What type of URLs would you like to export?', 1,
             ),
             Form.multiplechoice(
                 'fmt', [
-                    'do not categorize',
-                    'by the websites from which they are found',
-                    'by the websites that they point to',
+                    'do not categorize URLs',
+                    'categorize by the websites from which they are found',
+                    'categorize by the websites that they point to',
                 ], 'Would you like to categorize the exported URLs?', 1),
         )
         if not self._fill_form(form):
@@ -173,6 +170,29 @@ class Wizard(Cmd):
         print('Goodbye!')
         return 0
 
+    def do_intro(self, arg=None):
+        """Show an introduction to this program."""
+        echo_via_pager(dedent(
+            """
+            Welcome!
+
+            The typical workflow of this program is scrape -> export.
+
+            First, use the "scrape" command to download data of the feed of your choice to a local folder.
+
+            You will need the URL to your RSS feed, for example "http://xkcd.com/atom.xml". For some sites
+            (see the presets folder), providing the URL to the homepage may suffice.
+
+            After Scrapy has finished scraping the feed, you may then export collected URLs to a text file:
+            use the "export" command to do that.
+
+            For more advanced usage of this program, consult the READMD.md file. Many Scrapy commands also
+            have their own documentation.
+
+            Happy scraping!
+            """,
+        ).strip())
+
     def do_help(self, arg=None):
         """Show this help."""
         names = self.get_names()
@@ -192,7 +212,7 @@ class Wizard(Cmd):
                 print(docs[arg])
             return
 
-        print('Things you can do:\n')
+        print('Things you can do in this program:\n')
         for k, v in sorted(docs.items()):
             k = k.ljust(pad)
             print(f'  {k} - {v}')
@@ -202,6 +222,15 @@ class Wizard(Cmd):
 
     def emptyline(self):
         return self.do_help()
+
+    def precmd(self, line):
+        cmd, _, _ = self.parseline(line)
+        if cmd in ('scrape', 'export', 'resume'):
+            func = getattr(self, f'do_{cmd}')
+            print()
+            print(func.__doc__)
+            print('(Press Control-C to cancel)')
+        return super().precmd(line)
 
     def postcmd(self, stop, line):
         if stop == 0:

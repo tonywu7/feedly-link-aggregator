@@ -9,7 +9,10 @@ def walk_package(path=None, name=__name__):
         if not is_pkg:
             spec = loader.find_spec(pkg_name)
             mod = module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            try:
+                spec.loader.exec_module(mod)
+            except (ImportError, ModuleNotFoundError):
+                continue
             yield mod
         else:
             yield from walk_package(path / module_name, pkg_name)
@@ -52,7 +55,7 @@ def _config_logging(config=None, *args, **kwargs):
                     }}})
 
         overrides += config.get('LOGGING_OVERRIDES', [])
-        logging.basicConfig(force=True)
+        # logging.basicConfig(force=True)
         dictConfig(make_logging_config('feedly', *overrides, **kwargs))
         return
 

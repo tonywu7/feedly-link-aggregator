@@ -58,7 +58,7 @@ def export_load_exporter(ctx: click.Context, param, value):
     except (AttributeError, ModuleNotFoundError, AssertionError):
         not_found = True
         exporter = export
-    if ctx.params.get('help'):
+    if ctx.params.get('help') or value == 'help':
         ctx.meta['topic_name'] = value
         ctx.invoke(help_export, ctx, None, exporter)
     elif not_found:

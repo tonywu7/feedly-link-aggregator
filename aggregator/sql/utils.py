@@ -37,6 +37,8 @@ def offset_fetch(conn, stmt, table, *, values=(), size=100000, log=None):
     i = 0
     offset = 0
     max_id = conn.execute(f'SELECT max(rowid) FROM {table}').fetchone()[0]
+    if not max_id:
+        raise StopIteration
     while offset <= max_id:
         limited = stmt % {'offset': (
             f'{table}.rowid IN '
