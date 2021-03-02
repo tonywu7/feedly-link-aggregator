@@ -26,7 +26,7 @@ if %ERRORLEVEL% neq 0 (
 
     set ERROR=0
     set WHEEL=Twisted-20.3.0-!PYVER!-win!OSVER!.whl
-    set URL=https://github.com/monotony113/feedly-link-aggregator/raw/vendor/_wheels/!WHEEL!
+    set URL=https://github.com/tonywu7/feedly-link-aggregator/raw/vendor/_wheels/!WHEEL!
     echo Downloading !URL!
     powershell -Command "(New-Object Net.WebClient).DownloadFile('!URL!', '%CD%\!WHEEL!')"
 
