@@ -50,7 +50,7 @@ class ConditionalDepthSpiderMiddleware(DepthMiddleware):
         super().__init__(maxdepth, stats, verbose_stats=verbose_stats, prio=prio)
 
     def process_spider_output(self, response, result, spider):
-        if not self.maxdepth:
+        if self.maxdepth is None:
             self.maxdepth = spider.config.getint('DEPTH_LIMIT')
         should_increase = []
         other_items = []

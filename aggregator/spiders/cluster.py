@@ -93,7 +93,7 @@ class ExplorationSpiderMiddleware:
         for u in dest:
             self._discovered[f'{u.scheme}://{u.netloc}'] += 1
 
-        if depth < self._depth_limit:
+        if not self._depth_limit or depth < self._depth_limit:
             yield from self.schedule_new_nodes(item, depth, response.request, spider)
 
         self.update_ratio()

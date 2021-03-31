@@ -338,6 +338,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
             buffer = self.buffer
             if not buffer:
                 return
+            item = None
             try:
                 while buffer:
                     item = buffer.popleft()
@@ -349,8 +350,9 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
                     self.log.warning('Record discarded because writer process was terminated.')
                     buffer.clear()
                     return
-                with watch_for_len('pending records', buffer, self.maxsize):
-                    buffer.appendleft(item)
+                if item:
+                    with watch_for_len('pending records', buffer, self.maxsize):
+                        buffer.appendleft(item)
 
         def write(self, *item):
             if not self.ready.is_set():

@@ -31,8 +31,10 @@ except ImportError:
     _ = None
 
 try:
+    import platform
     import colorama
-    colorama.init()
+    if platform.system() == 'Windows':
+        colorama.init()
 except ImportError:
     _ = None
 
