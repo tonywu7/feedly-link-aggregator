@@ -12,7 +12,7 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 >
 > See the [next section](#setup) for more advanced usage of this program as a command-line tool.
 
-![#96c475](https://placehold.it/12/96c475/000000?text=+) [Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
+![#96c475](https://via.placeholder.com/12/96c475/000000?text=+) [Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
 extract it somewhere, then:
 
 - On Windows, run `start.bat`. This will start an interactive program that can perform the most common tasks.
@@ -108,7 +108,7 @@ Currently `<topic>` can be
 - `urls`: Export URLs as plain-text or CSV files.
 - `graph`: Represent URLs and their relations using a graph data structure (exported as GraphML files).
 
-**![#56b6c2](https://placehold.it/12/56b6c2/000000?text=+) Example: Tumblr GIFs**
+**![#56b6c2](https://via.placeholder.com/12/56b6c2/000000?text=+) Example: Tumblr GIFs**
 
 ```bash
 scrapy export urls -i data \
@@ -236,7 +236,7 @@ you can define your templates like such:
 - Or, you may also enable the search function (`-s enable_search=True`, or in preset: `ENABLE_SEARCH = True`). This will let the spider search Feedly
 for each domain name it encounters, and crawl all returned feed.
 
-    ![#e5c07b](https://placehold.it/12/e5c07b/000000?text=+) **Warning: This is not recommended as the spider can quickly get rate-limited by Feedly.**
+    ![#e5c07b](https://via.placeholder.com/12/e5c07b/000000?text=+) **Warning: This is not recommended as the spider can quickly get rate-limited by Feedly.**
 
 Cluster spider works best for sites that have predefined endpoints for RSS feeds, such as WordPress and Tumblr blogs (for which a
 [preset](./presets/tumblr.py) is provided). Of course, if you can provide enough feed templates, it can work with many other sites as well.
