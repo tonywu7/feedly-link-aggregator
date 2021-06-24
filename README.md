@@ -6,6 +6,10 @@ A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Stream
 **for purposes such as archival work. If you are only looking to browse a feed and/or download a few things,**
 **it's more appropriate (and friendly) to use [Feedly](https://feedly.com) directly.**
 
+## Requirement
+
+Requires Python 3.8+
+
 ## Quick usage
 
 > This section describes basic usage of this program that requires little knowledge of Python or even command lines in general.
