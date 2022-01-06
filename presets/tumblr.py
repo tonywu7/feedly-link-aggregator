@@ -29,6 +29,6 @@ TUMBLR_IGNORE = {
 }
 
 CONTRIB_SPIDER_MIDDLEWARES = {
-    'aggregator.contrib.filters.KeywordPrioritizer': 500,
-    'aggregator.contrib.tumblr.TumblrFilter': 505,
+    'feedme.contrib.filters.KeywordPrioritizer': 500,
+    'feedme.contrib.tumblr.TumblrFilter': 505,
 }

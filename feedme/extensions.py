@@ -161,7 +161,7 @@ class SettingsLoader:
 
     @classmethod
     def from_pyfile(cls, settings, path):
-        spec = spec_from_file_location('aggregator.user_preset', path)
+        spec = spec_from_file_location('feedme.user_preset', path)
         mod = module_from_spec(spec)
         spec.loader.exec_module(mod)
         cls.from_object(settings, mod)
@@ -449,7 +449,7 @@ class ContribMiddleware(OptionsContributor):
             For example, to enable the provided KeywordPrioritizer, do:
 
                 `CONTRIB_SPIDER_MIDDLEWARES = {`
-                    `'aggregator.contrib.filters.KeywordPrioritizer': 500`
+                    `'feedme.contrib.filters.KeywordPrioritizer': 500`
                 `}`
             """,
         }

@@ -1,4 +1,4 @@
-# feedly-link-aggregator
+# feedly-link-feedme
 
 A Scrapy project for collecting hyperlinks from RSS feeds using Feedly's [Streams API](https://developer.feedly.com/v3/streams/).
 
@@ -16,7 +16,7 @@ Requires Python 3.8+
 >
 > See the [next section](#setup) for more advanced usage of this program as a command-line tool.
 
-![#96c475](https://via.placeholder.com/12/96c475/000000?text=+) [Download](https://github.com/monotony113/feedly-link-aggregator/archive/master.zip) the archive and
+![#96c475](https://via.placeholder.com/12/96c475/000000?text=+) [Download](https://github.com/monotony113/feedly-link-feedme/archive/master.zip) the archive and
 extract it somewhere, then:
 
 - On Windows, run `start.bat`. This will start an interactive program that can perform the most common tasks.
@@ -99,7 +99,7 @@ precedence over the ones defined in a preset.
 > scrapy export <topic> -i '<dir>'
 ```
 
-> Previous versions of this program use a different command `python -m aggregator` for tasks unrelated to Scrapy,
+> Previous versions of this program use a different command `python -m feedme` for tasks unrelated to Scrapy,
 > which is still supported.
 > 
 > However, the `scrapy` command now supports running those commands as well, and is

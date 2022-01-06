@@ -119,7 +119,7 @@ def with_db(exporter):
         conn = sqlite3.connect(db_path, isolation_level=None)
         if db.is_locked(conn):
             log.error('Database was left in a partially consistent state.')
-            log.error('Run `python -m aggregator check-db` to fix it first.')
+            log.error('Run `python -m feedme check-db` to fix it first.')
             return 1
 
         conn.row_factory = sqlite3.Row

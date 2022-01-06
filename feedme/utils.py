@@ -282,7 +282,7 @@ SIMPLEJSON_KWARGS = {
 class RenamingUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
         if module[:7] == 'feedly.':
-            module = 'aggregator.' + module[7:]
+            module = 'feedme.' + module[7:]
         if name == 'ProbeRequest':
             name = 'ProbeFeed'
         return super().find_class(module, name)

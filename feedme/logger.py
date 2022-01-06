@@ -30,14 +30,6 @@ try:
 except ImportError:
     _ = None
 
-try:
-    import platform
-    import colorama
-    if platform.system() == 'Windows':
-        colorama.init()
-except ImportError:
-    _ = None
-
 
 def compose_mappings(*mappings):
     base = {}

@@ -11,8 +11,8 @@ __version__ = '0.10.11'
 
 BOT_NAME = 'feedly'
 
-SPIDER_MODULES = ['aggregator.spiders']
-NEWSPIDER_MODULE = 'aggregator.spiders'
+SPIDER_MODULES = ['feedme.spiders']
+NEWSPIDER_MODULE = 'feedme.spiders'
 
 LOG_ENABLED = True
 LOG_LEVEL = 20
@@ -23,14 +23,14 @@ METRICS_CALC_INTERVAL = 20.0
 LOG_VIOLATIONS = False
 STATS_DUMP = False
 
-COMMANDS_MODULE = 'aggregator.commands'
+COMMANDS_MODULE = 'feedme.commands'
 
 # This program uses a custom logging config (see __init__.py)
 # To give control of logging back to Scrapy, set this to False
 CUSTOM_LOGGING_ENABLED = True
 
 # Crawl responsibly by identifying yourself (and your website) on the user-agent
-USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkaggregator/{__version__}; +https://github.com/monotony113/feedly-link-aggregator)'
+USER_AGENT = f'Mozilla/5.0 (compatible; hyperlinkfeedme/{__version__}; +https://github.com/monotony113/feedly-link-feedme)'
 
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = True
@@ -61,13 +61,13 @@ DEFAULT_REQUEST_HEADERS = {
 # See https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 SPIDER_MIDDLEWARES = {
     'scrapy.spidermiddlewares.depth.DepthMiddleware': None,
-    'aggregator.middlewares.RequestDefrosterSpiderMiddleware': 100,
-    'aggregator.middlewares.DerefItemSpiderMiddleware': 101,
-    'aggregator.middlewares.OffsiteFeedSpiderMiddleware': 500,
-    'aggregator.middlewares.ConditionalDepthSpiderMiddleware': 550,
-    'aggregator.middlewares.FetchSourceSpiderMiddleware': 600,
-    'aggregator.middlewares.CrawledItemSpiderMiddleware': 800,
-    'aggregator.spiders.cluster.ExplorationSpiderMiddleware': 900,
+    'feedme.middlewares.RequestDefrosterSpiderMiddleware': 100,
+    'feedme.middlewares.DerefItemSpiderMiddleware': 101,
+    'feedme.middlewares.OffsiteFeedSpiderMiddleware': 500,
+    'feedme.middlewares.ConditionalDepthSpiderMiddleware': 550,
+    'feedme.middlewares.FetchSourceSpiderMiddleware': 600,
+    'feedme.middlewares.CrawledItemSpiderMiddleware': 800,
+    'feedme.spiders.cluster.ExplorationSpiderMiddleware': 900,
 }
 
 HTTPERROR_ALLOWED_CODES = [403, 404]
@@ -75,31 +75,31 @@ HTTPERROR_ALLOWED_CODES = [403, 404]
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 DOWNLOADER_MIDDLEWARES = {
-    'aggregator.middlewares.RequestPersistenceDownloaderMiddleware': 150,
-    'aggregator.middlewares.FeedProbingDownloaderMiddleware': 200,
-    'aggregator.middlewares.HTTPErrorDownloaderMiddleware': 500,
-    'aggregator.middlewares.AuthorizationDownloaderMiddleware': 600,
+    'feedme.middlewares.RequestPersistenceDownloaderMiddleware': 150,
+    'feedme.middlewares.FeedProbingDownloaderMiddleware': 200,
+    'feedme.middlewares.HTTPErrorDownloaderMiddleware': 500,
+    'feedme.middlewares.AuthorizationDownloaderMiddleware': 600,
 }
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
 EXTENSIONS = {
     'scrapy.extensions.logstats.LogStats': None,
-    'aggregator.extensions._LoggingHelper': 99,
-    'aggregator.extensions.PresetLoader': 100,
-    'aggregator.extensions.SettingsLoader': 101,
-    'aggregator.extensions.LogStatsExtended': 102,
-    'aggregator.extensions.RequestMetrics': 102,
-    'aggregator.extensions.ContribMiddleware': 200,
-    'aggregator.extensions.GlobalPersistence': 999,
+    'feedme.extensions._LoggingHelper': 99,
+    'feedme.extensions.PresetLoader': 100,
+    'feedme.extensions.SettingsLoader': 101,
+    'feedme.extensions.LogStatsExtended': 102,
+    'feedme.extensions.RequestMetrics': 102,
+    'feedme.extensions.ContribMiddleware': 200,
+    'feedme.extensions.GlobalPersistence': 999,
 }
 
 # Configure item pipelines
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-    # 'aggregator.pipelines.CompressedStreamExportPipeline': 900,
-    # 'aggregator.pipelines.SQLiteExportPipeline': 900,
-    'aggregator.pipelines.SQLiteExportProcessPipeline': 900,
+    # 'feedme.pipelines.CompressedStreamExportPipeline': 900,
+    # 'feedme.pipelines.SQLiteExportPipeline': 900,
+    'feedme.pipelines.SQLiteExportProcessPipeline': 900,
 }
 
 AUTO_LOAD_PREDEFINED_PRESETS = True

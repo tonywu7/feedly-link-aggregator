@@ -82,7 +82,7 @@ class OptionsContributor:
     @markdown_inline
     def format_docs():
         yield from [
-            click.style('Aggregator Customization Manual\n\n'.upper(), fg='black', bg='white', bold=True),
+            click.style('feedme Customization Manual\n\n'.upper(), fg='black', bg='white', bold=True),
             'This program supports the use of presets, which lets you define \n'
             'options for different scenarios.\n',
             '\n',

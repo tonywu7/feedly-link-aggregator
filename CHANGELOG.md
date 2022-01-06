@@ -25,7 +25,7 @@
     potential new feed, the cluster spider will only start crawling a new feed if the number of times a website
     was seen crosses this threshold. Setting this to higher than 1 makes feeds in the resulting cluster more
     related to each other, since they mention each other more.
-    - NEW command `python -m aggregator customizations`: a manual of supported options that can be specified in
+    - NEW command `python -m feedme customizations`: a manual of supported options that can be specified in
     a preset.
 - **v0.10.6**
     - Performance update.

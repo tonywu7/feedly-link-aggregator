@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "feedme"
+version = "0.10.11"
+description = ""
+authors = ["tonyzbf <tonyzbf@protonmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+click = "^8.0.3"
+Scrapy = "^2.5.1"
+cryptography = "^36.0.1"
+cffi = "^1.15.0"
+pycparser = "^2.21"
+six = "^1.16.0"
+cssselect = "^1.1.0"
+itemadapter = "^0.4.0"
+itemloaders = "^1.0.4"
+jmespath = "^0.10.0"
+parsel = "^1.6.0"
+lxml = "^4.7.1"
+w3lib = "^1.22.0"
+Protego = "^0.1.16"
+PyDispatcher = "^2.0.5"
+pyOpenSSL = "^21.0.0"
+queuelib = "^1.6.2"
+service-identity = "^21.1.0"
+attrs = "^21.4.0"
+pyasn1 = "^0.4.8"
+pyasn1-modules = "^0.2.8"
+Twisted = "^21.7.0"
+Automat = "^20.2.0"
+constantly = "^15.1.0"
+hyperlink = "^21.0.0"
+idna = "^3.3"
+incremental = "^21.3.0"
+PyHamcrest = "^2.0.3"
+"zope.interface" = "^5.4.0"
+setuptools = "^60.3.0"
+simplejson = "^3.17.6"
+termcolor = "^1.1.0"
+aiofiles = "^0.8.0"
+aiohttp = "^3.8.1"
+more-itertools = "^8.12.0"
+SQLAlchemy = "^1.4.29"
+python-igraph = "^0.9.8"
+texttable = "^1.6.4"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -84,7 +84,7 @@ class CompressedStreamExportPipeline:
             spider.digest_feed_export(self.stream)
         else:
             self.logger.warning('Scraped data have not been saved to database.')
-            self.logger.warning('To save them, run `python -m aggregator consume-leftovers`')
+            self.logger.warning('To save them, run `python -m feedme consume-leftovers`')
             date = f'{self.stream_path.suffixes[0]}.{self.stream_path.suffixes[1]}'
             unsaved = self.stream_path.with_name(f'stream~unsaved.{date}.jsonl.gz')
             self.stream_path.rename(unsaved)
@@ -213,7 +213,6 @@ class SQLiteExportPipeline(OptionsContributor):
             Setting this to ~0~ causes the program to keep all scraped data in memory until the spider stops.
             """,
         }
-
 
 
 class DatabaseStorageProcess(ctx.Process):
@@ -432,7 +431,7 @@ class SQLiteExportProcessPipeline(SQLiteExportPipeline):
     def handle_version_error(self, exc):
         self.log.critical(exc)
         self.log.error(_('Cannot write to the existing database because it uses another schema version.', color='red'))
-        self.log.error(_('Run `python -m aggregator upgrade-db` to upgrade it to the current version.', color='cyan'))
+        self.log.error(_('Run `python -m feedme upgrade-db` to upgrade it to the current version.', color='cyan'))
         return 'incompatible_database'
 
     def process_item(self, data, spider):

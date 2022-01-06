@@ -241,3 +241,11 @@ def gen_commands():
         if not v.hidden:
             with open(path / f'{k}.py', 'w+') as f:
                 f.write(template)
+
+
+@cli.command(hidden=True)
+@click.option('-i', '--input', 'wd', required=True, type=click.Path(exists=True, file_okay=False))
+@click.option('-p', '--pattern', required=False, default='tumblr.com')
+def browser(wd, pattern):
+    from .contrib.browser import run_app
+    run_app(wd, pattern)
